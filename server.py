@@ -25,7 +25,7 @@ tokenizer = None
 model_config = None
 
 class LoadModelRequest(BaseModel):
-    model_name: str = "meta-llama/Llama-3.2-3B"
+    model_name: str = "meta-llama/Llama-3.2-1B"
 
 class InterventionConfig(BaseModel):
     type: str # "scale", "zero", "add", "block_attention"
@@ -206,6 +206,7 @@ def inference(req: InferenceRequest):
         raise HTTPException(status_code=500, detail=f"Error processing states: {str(e)}")
     
     lens_data = []
+    layer_names = []
     
     for i, h in enumerate(states_to_process):
         # Project
@@ -232,6 +233,8 @@ def inference(req: InferenceRequest):
             if i == len(states_to_process) - 1:
                 layer_name = "Final Output"
             
+        layer_names.append(layer_name)
+            
         # decoded[0] is List[List[Dict]] (seq_len -> top_k)
         # Return all top-k predictions for each position
         all_predictions = decoded[0]  # This is already a list of lists
@@ -243,23 +246,127 @@ def inference(req: InferenceRequest):
         })
 
     # Store for saving
-    last_run_state["hidden_states"] = [h.cpu().numpy() for h in states_to_process]
-    last_run_state["logits"] = outputs["logits"].cpu().numpy()
-    last_run_state["text"] = req.text
+    # Keep hidden states as tensors in memory for NPZ saving
+    # But also convert to list for JSON config if needed (though we might want to exclude heavy data from config now)
+    
+    # We will NOT put hidden_states/logits in the config JSON anymore to keep it light.
+    # They will be saved to NPZ.
+    
+    last_run_state = {
+        "config": {
+            "text": req.text,
+            "interventions": {k: v.dict() for k, v in req.interventions.items()},
+            "lens_type": req.lens_type,
+            "model_name": model_config,
+            "results": {
+                "text": req.text,
+                "logit_lens": lens_data
+            }
+        },
+        "tensors": {
+            "hidden_states": np.stack([h.cpu().numpy() for h in states_to_process]), # Stack to (layers, batch, seq, hidden)
+            "logits": outputs["logits"].cpu().numpy(),
+            "layer_names": np.array(layer_names),
+            "post_attention_states": np.stack([h.cpu().numpy() for h in outputs["post_attention_states"]])
+        }
+    }
 
     return {
         "text": req.text,
         "logit_lens": lens_data
     }
 
+SAVED_STATES_DIR = "saved_states"
+if not os.path.exists(SAVED_STATES_DIR):
+    os.makedirs(SAVED_STATES_DIR)
+
+class SaveStateRequest(BaseModel):
+    name: Optional[str] = None
+
+class LoadSessionRequest(BaseModel):
+    session_id: str
+
 @app.post("/save_state")
-def save_state(filename: str = "state.npz"):
+def save_state(req: SaveStateRequest):
     if not last_run_state:
         raise HTTPException(status_code=400, detail="No state to save")
     
-    path = os.path.join(os.getcwd(), filename)
-    np.savez(path, **last_run_state)
-    return {"status": "saved", "path": path}
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    name_part = f"_{req.name}" if req.name else ""
+    session_id = f"{timestamp}{name_part}"
+    
+    session_dir = os.path.join(SAVED_STATES_DIR, session_id)
+    os.makedirs(session_dir, exist_ok=True)
+    
+    # Save Config JSON
+    config_path = os.path.join(session_dir, "config.json")
+    import json
+    with open(config_path, 'w') as f:
+        json.dump(last_run_state["config"], f, indent=2)
+        
+    # Save Tensors NPZ
+    tensors_path = os.path.join(session_dir, "tensors.npz")
+    np.savez(tensors_path, **last_run_state["tensors"])
+    
+    return {"status": "saved", "session_id": session_id, "path": session_dir}
+
+@app.get("/sessions")
+def list_sessions():
+    if not os.path.exists(SAVED_STATES_DIR):
+        return []
+        
+    sessions = []
+    for name in sorted(os.listdir(SAVED_STATES_DIR), reverse=True):
+        path = os.path.join(SAVED_STATES_DIR, name)
+        if os.path.isdir(path):
+            # Try to read timestamp from name
+            try:
+                parts = name.split("_", 2)
+                timestamp_str = f"{parts[0]}_{parts[1]}"
+                display_name = parts[2] if len(parts) > 2 else "Untitled"
+            except:
+                timestamp_str = "Unknown"
+                display_name = name
+                
+            sessions.append({
+                "id": name,
+                "name": display_name,
+                "timestamp": timestamp_str
+            })
+    return sessions
+
+@app.post("/load_session")
+def load_session(req: LoadSessionRequest):
+    global last_run_state
+    session_dir = os.path.join(SAVED_STATES_DIR, req.session_id)
+    
+    if not os.path.exists(session_dir):
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    # Load Config
+    config_path = os.path.join(session_dir, "config.json")
+    if not os.path.exists(config_path):
+        raise HTTPException(status_code=404, detail="Config file not found")
+        
+    import json
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+        
+    # Load Tensors (Optional for UI, but good for state restoration)
+    tensors_path = os.path.join(session_dir, "tensors.npz")
+    tensors = {}
+    if os.path.exists(tensors_path):
+        loaded = np.load(tensors_path, allow_pickle=True)
+        tensors = {k: loaded[k] for k in loaded.files}
+        
+    # Restore global state
+    last_run_state = {
+        "config": config,
+        "tensors": tensors
+    }
+    
+    return config
 
 if __name__ == "__main__":
     import uvicorn

@@ -15,7 +15,7 @@ function App() {
   const [selectedModel, setSelectedModel] = useState("meta-llama/Llama-3.2-3B");
   const [lensType, setLensType] = useState("block_output");
   const [attnAllLayers, setAttnAllLayers] = useState(false);
-  const [hoveredCell, setHoveredCell] = useState<{ layer: number, token: number } | null>(null);
+
 
   const loadingRef = useRef(false);
 
@@ -102,6 +102,67 @@ function App() {
     });
   };
 
+  const [sessions, setSessions] = useState<{ id: string, name: string, timestamp: string }[]>([]);
+  const [showLoadModal, setShowLoadModal] = useState(false);
+
+  const saveSession = async () => {
+    const name = prompt("Enter a name for this session (optional):");
+    if (name === null) return; // Cancelled
+
+    try {
+      await axios.post(`${API_URL}/save_state`, { name });
+      alert("Session saved successfully!");
+    } catch (err) {
+      console.error("Failed to save session", err);
+      alert("Failed to save session");
+    }
+  };
+
+  const fetchSessions = async () => {
+    try {
+      const res = await axios.get(`${API_URL}/sessions`);
+      setSessions(res.data);
+    } catch (err) {
+      console.error("Failed to fetch sessions", err);
+    }
+  };
+
+  const openLoadModal = () => {
+    fetchSessions();
+    setShowLoadModal(true);
+  };
+
+  const loadSession = async (sessionId: string) => {
+    try {
+      const res = await axios.post(`${API_URL}/load_session`, { session_id: sessionId });
+      const json = res.data;
+
+      // Restore state
+      setText(json.text);
+      setInterventions(json.interventions);
+      setLensType(json.lens_type);
+      setResults(json.results);
+
+      if (json.model_name && json.model_name !== selectedModel) {
+        setSelectedModel(json.model_name);
+        alert(`Session loaded. Model set to ${json.model_name}. Ensure this model is loaded if you want to run new inferences.`);
+      }
+
+      setShowLoadModal(false);
+    } catch (err) {
+      console.error("Failed to load session", err);
+      alert("Failed to load session");
+    }
+  };
+
+  const [tooltipData, setTooltipData] = useState<{
+    layer: number;
+    token: number;
+    rect: DOMRect;
+    preds: any[];
+    layerName: string;
+  } | null>(null);
+
   return (
     <div className="app-container">
       <header>
@@ -122,8 +183,53 @@ function App() {
           <div className="status">
             Status: {loading ? "Loading..." : modelLoaded ? "Ready" : "Not Loaded"}
           </div>
+
+          <div className="session-controls" style={{ display: 'flex', gap: '0.5rem' }}>
+            <button onClick={saveSession} disabled={!results} className="secondary-btn" style={{ fontSize: '0.9em', padding: '4px 8px' }}>
+              Save
+            </button>
+            <button onClick={openLoadModal} className="secondary-btn" style={{ fontSize: '0.9em', padding: '4px 8px' }}>
+              Load
+            </button>
+          </div>
         </div>
       </header>
+
+      {showLoadModal && (
+        <div className="modal-overlay" style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 1000,
+          display: 'flex', justifyContent: 'center', alignItems: 'center'
+        }}>
+          <div className="modal-content" style={{
+            backgroundColor: '#1a1a1a', padding: '20px', borderRadius: '8px',
+            width: '400px', maxHeight: '80vh', overflowY: 'auto',
+            border: '1px solid #333'
+          }}>
+            <h3 style={{ marginTop: 0 }}>Load Session</h3>
+            <div className="session-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '15px 0' }}>
+              {sessions.length === 0 ? (
+                <p style={{ color: '#888' }}>No saved sessions found.</p>
+              ) : (
+                sessions.map(s => (
+                  <button
+                    key={s.id}
+                    onClick={() => loadSession(s.id)}
+                    className="secondary-btn"
+                    style={{ textAlign: 'left', padding: '10px', display: 'flex', justifyContent: 'space-between' }}
+                  >
+                    <span>{s.name}</span>
+                    <span style={{ fontSize: '0.8em', color: '#888' }}>{s.timestamp}</span>
+                  </button>
+                ))
+              )}
+            </div>
+            <button onClick={() => setShowLoadModal(false)} style={{ width: '100%', padding: '8px' }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       <main className="grid-cols-2">
         <div className="controls card">
@@ -147,7 +253,7 @@ function App() {
                     {layer}: {config.type}
                     {config.type === 'scale' && `(${config.value})`}
                     {config.type === 'block_attention' && config.source_tokens && config.target_tokens && ` (${config.source_tokens.join(',')} → ${config.target_tokens.join(',')})`}
-                    {config.token_index !== undefined && ` @ Token ${config.token_index}`}
+                    {config.token_index != null && ` @ Token ${config.token_index}`}
                     {config.all_layers && ` [ALL LAYERS]`}
                   </span>
                   <button onClick={() => removeIntervention(layer)} style={{ padding: '4px 8px', fontSize: '0.8em' }}>X</button>
@@ -317,13 +423,21 @@ function App() {
                       {layer.predictions.map((preds, i) => {
                         // preds is now an array of 5 predictions for this token position
                         const topPred = preds[0]; // Show top prediction in the cell
-                        const isHovered = hoveredCell?.layer === layer.layer_index && hoveredCell?.token === i;
                         return (
                           <td
                             key={i}
                             style={{ padding: '4px', borderBottom: '1px solid #333', textAlign: 'center', position: 'relative' }}
-                            onMouseEnter={() => setHoveredCell({ layer: layer.layer_index, token: i })}
-                            onMouseLeave={() => setHoveredCell(null)}
+                            onMouseEnter={(e) => {
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              setTooltipData({
+                                layer: layer.layer_index,
+                                token: i,
+                                rect,
+                                preds,
+                                layerName: layer.layer_name
+                              });
+                            }}
+                            onMouseLeave={() => setTooltipData(null)}
                           >
                             <div className="token-box" style={{
                               opacity: Math.max(0.3, topPred.prob * 2),
@@ -336,44 +450,6 @@ function App() {
                               <span style={{ fontWeight: 'bold' }}>{topPred.token}</span>
                               <span style={{ fontSize: '0.7em', color: '#aaa' }}>{topPred.prob.toFixed(2)}</span>
                             </div>
-
-                            {/* Tooltip showing top 5 predictions */}
-                            {isHovered && (
-                              <div style={{
-                                position: 'absolute',
-                                top: '100%',
-                                left: '50%',
-                                transform: 'translateX(-50%)',
-                                backgroundColor: '#1a1a1a',
-                                border: '1px solid #444',
-                                borderRadius: '4px',
-                                padding: '8px',
-                                zIndex: 1000,
-                                minWidth: '180px',
-                                boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
-                                marginTop: '4px',
-                                whiteSpace: 'nowrap'
-                              }}>
-                                <div style={{ fontSize: '0.8em', fontWeight: 'bold', marginBottom: '6px', color: '#aaa' }}>
-                                  {layer.layer_name} - Pos {i}
-                                </div>
-                                {preds.map((pred, idx) => (
-                                  <div key={idx} style={{
-                                    fontSize: '0.75em',
-                                    padding: '2px 0',
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    gap: '12px',
-                                    color: idx === 0 ? '#fff' : '#ccc'
-                                  }}>
-                                    <span style={{ fontWeight: idx === 0 ? 'bold' : 'normal' }}>
-                                      {idx + 1}. {pred.token}
-                                    </span>
-                                    <span style={{ color: '#888' }}>{(pred.prob * 100).toFixed(1)}%</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
                           </td>
                         );
                       })}
@@ -387,6 +463,65 @@ function App() {
           )}
         </div>
       </main>
+
+      {/* Global Fixed Tooltip */}
+      {tooltipData && (() => {
+        const TOOLTIP_WIDTH = 200; // approximate width
+        const TOOLTIP_HEIGHT = 150; // approximate height
+        const VIEWPORT_PADDING = 10;
+
+        let top = tooltipData.rect.bottom + 4;
+        let left = tooltipData.rect.left + (tooltipData.rect.width / 2);
+
+        // Vertical boundary check
+        if (top + TOOLTIP_HEIGHT > window.innerHeight) {
+          top = tooltipData.rect.top - TOOLTIP_HEIGHT - 4; // Show above
+        }
+
+        // Horizontal boundary check
+        if (left + (TOOLTIP_WIDTH / 2) > window.innerWidth - VIEWPORT_PADDING) {
+          left = window.innerWidth - (TOOLTIP_WIDTH / 2) - VIEWPORT_PADDING;
+        } else if (left - (TOOLTIP_WIDTH / 2) < VIEWPORT_PADDING) {
+          left = (TOOLTIP_WIDTH / 2) + VIEWPORT_PADDING;
+        }
+
+        return (
+          <div style={{
+            position: 'fixed',
+            top: top,
+            left: left,
+            transform: 'translateX(-50%)',
+            backgroundColor: '#1a1a1a',
+            border: '1px solid #444',
+            borderRadius: '4px',
+            padding: '8px',
+            zIndex: 9999, // High z-index to ensure it's on top
+            minWidth: '180px',
+            boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
+            pointerEvents: 'none', // Prevent tooltip from interfering with mouse events
+            whiteSpace: 'nowrap'
+          }}>
+            <div style={{ fontSize: '0.8em', fontWeight: 'bold', marginBottom: '6px', color: '#aaa' }}>
+              {tooltipData.layerName} - Pos {tooltipData.token}
+            </div>
+            {tooltipData.preds.map((pred, idx) => (
+              <div key={idx} style={{
+                fontSize: '0.75em',
+                padding: '2px 0',
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: '12px',
+                color: idx === 0 ? '#fff' : '#ccc'
+              }}>
+                <span style={{ fontWeight: idx === 0 ? 'bold' : 'normal' }}>
+                  {idx + 1}. {pred.token}
+                </span>
+                <span style={{ color: '#888' }}>{(pred.prob * 100).toFixed(1)}%</span>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
     </div>
   )
 }
