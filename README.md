@@ -4,16 +4,12 @@ An interactive tool to analyze and intervene on Llama model internal states usin
 
 ## Features
 
-- **Barebones Llama Implementation**: Custom PyTorch implementation of Llama architecture for maximum control.
 - **Interactive Logit Lens**: Visualize the model's prediction at every layer (Embeddings -> Layers -> Output).
 - **Interventions**: Modify internal streams (Residual, Attention, MLP) in real-time.
     - **Zero**: Zero out specific vectors.
     - **Scale**: Scale vectors by a factor.
     - **Block Attention**: Prevent information flow between specific tokens or across layers.
 - **Session Management**: Save and load your analysis sessions (config + full tensor state).
-- **Web Interface**: Clean, dark-themed React UI with:
-    - **Enhanced Tooltips**: View top 5 predictions per cell.
-    - **Dynamic Layout**: Responsive design for large models.
 
 ## Installation
 
@@ -27,6 +23,7 @@ An interactive tool to analyze and intervene on Llama model internal states usin
     cd frontend
     npm install
     ```
+In order to access Llama models from meta-llama you would need to set up a [huggingface token](https://huggingface.co/docs/hub/en/security-tokens). 
 
 ## Usage
 
