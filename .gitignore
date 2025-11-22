@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# User data
+saved_states/
+.DS_Store

@@ -9,7 +9,11 @@ An interactive tool to analyze and intervene on Llama model internal states usin
 - **Interventions**: Modify internal streams (Residual, Attention, MLP) in real-time.
     - **Zero**: Zero out specific vectors.
     - **Scale**: Scale vectors by a factor.
-- **Web Interface**: Clean, dark-themed React UI for easy interaction.
+    - **Block Attention**: Prevent information flow between specific tokens or across layers.
+- **Session Management**: Save and load your analysis sessions (config + full tensor state).
+- **Web Interface**: Clean, dark-themed React UI with:
+    - **Enhanced Tooltips**: View top 5 predictions per cell.
+    - **Dynamic Layout**: Responsive design for large models.
 
 ## Installation
 
