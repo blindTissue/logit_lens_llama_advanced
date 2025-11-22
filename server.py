@@ -1,0 +1,169 @@
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import Dict, Any, List, Optional
+import torch
+import numpy as np
+from transformers import AutoTokenizer
+from model import LlamaModel
+from logit_lens import compute_logit_lens, decode_top_k
+from fastapi.middleware.cors import CORSMiddleware
+import os
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global state
+model = None
+tokenizer = None
+model_config = None
+
+class LoadModelRequest(BaseModel):
+    model_name: str = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+
+class InterventionConfig(BaseModel):
+    type: str # "scale", "zero", "add"
+    value: Optional[float] = None # For scale
+    vector: Optional[List[float]] = None # For add
+    token_index: Optional[int] = None # Optional: target specific token
+
+class InferenceRequest(BaseModel):
+    text: str
+    interventions: Dict[str, InterventionConfig] = {} # key: hook_name (e.g. "layer_0_output")
+
+class SaveStateRequest(BaseModel):
+    filename: str
+    data: Dict[str, Any] # This might be too large to pass back and forth. 
+                         # Better: The server keeps the last state and saves it on request.
+
+# Store last run state for saving
+last_run_state = {}
+
+import threading
+
+model_lock = threading.Lock()
+
+@app.post("/load_model")
+def load_model(req: LoadModelRequest):
+    global model, tokenizer, model_config
+    
+    # Quick check before lock
+    if model is not None and model_config == req.model_name:
+         return {"status": "already_loaded", "config": str(model.config)}
+
+    with model_lock:
+        # Check again inside lock
+        if model is not None and model_config == req.model_name:
+             return {"status": "already_loaded", "config": str(model.config)}
+             
+        try:
+            print(f"Loading {req.model_name}...")
+            tokenizer = AutoTokenizer.from_pretrained(req.model_name)
+            model = LlamaModel.from_pretrained(req.model_name, device="cpu") # Use CPU for safety/compatibility first
+            # model.to("mps") # Uncomment if on Mac with MPS support
+            model_config = req.model_name # Store the model name in model_config global variable
+            return {"status": "loaded", "config": str(model.config)}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/model_status")
+def get_model_status():
+    global model, model_config
+    return {"loaded": model is not None, "model_name": model_config if model else None}
+
+def create_intervention_hook(config: InterventionConfig):
+    def hook(tensor):
+        # tensor shape: [batch, seq_len, hidden_size]
+        
+        if config.token_index is not None:
+            # Apply only to specific token
+            idx = config.token_index
+            if idx < 0: idx += tensor.shape[1] # Handle negative indices
+            
+            if 0 <= idx < tensor.shape[1]:
+                if config.type == "zero":
+                    tensor[:, idx, :] = 0
+                elif config.type == "scale":
+                    tensor[:, idx, :] *= config.value
+            return tensor
+        
+        # Apply to all tokens if no index specified
+        if config.type == "zero":
+            return torch.zeros_like(tensor)
+        elif config.type == "scale":
+            return tensor * config.value
+        # Add more complex ones later
+        return tensor
+    return hook
+
+@app.post("/inference")
+def inference(req: InferenceRequest):
+    global model, tokenizer, last_run_state
+    if model is None:
+        raise HTTPException(status_code=400, detail="Model not loaded")
+
+    input_ids = tokenizer.encode(req.text, return_tensors="pt").to(model.embed_tokens.weight.device)
+    
+    # Parse interventions
+    intervention_hooks = {}
+    for name, config in req.interventions.items():
+        intervention_hooks[name] = create_intervention_hook(config)
+
+    with torch.no_grad():
+        outputs = model(input_ids, interventions=intervention_hooks)
+    
+    # Process LogitLens
+    hidden_states = outputs["hidden_states"] # Tuple of (batch, seq, hidden)
+    
+    lens_data = []
+    
+    # We want to see predictions at each layer
+    # hidden_states includes embeddings (idx 0) + layers + final norm
+    
+    for i, h in enumerate(hidden_states):
+        # Project
+        logits = compute_logit_lens(h, model.lm_head, model.norm)
+        decoded = decode_top_k(logits, tokenizer, k=5)
+        
+        layer_name = f"Layer {i-1}" if i > 0 else "Embeddings"
+        if i == len(hidden_states) - 1:
+            layer_name = "Final Output"
+            
+        # decoded[0] is List[List[Dict]] (seq_len -> top_k)
+        # The frontend expects a flat list of tokens (one per position), so we take top-1.
+        top1_predictions = [preds[0] for preds in decoded[0]]
+
+        lens_data.append({
+            "layer_index": i,
+            "layer_name": layer_name,
+            "predictions": top1_predictions 
+        })
+
+    # Store for saving
+    last_run_state["hidden_states"] = [h.cpu().numpy() for h in hidden_states]
+    last_run_state["logits"] = outputs["logits"].cpu().numpy()
+    last_run_state["text"] = req.text
+
+    return {
+        "text": req.text,
+        "logit_lens": lens_data
+    }
+
+@app.post("/save_state")
+def save_state(filename: str = "state.npz"):
+    if not last_run_state:
+        raise HTTPException(status_code=400, detail="No state to save")
+    
+    path = os.path.join(os.getcwd(), filename)
+    np.savez(path, **last_run_state)
+    return {"status": "saved", "path": path}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
