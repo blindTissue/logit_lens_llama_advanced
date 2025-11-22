@@ -34,6 +34,7 @@ class InterventionConfig(BaseModel):
     token_index: Optional[int] = None # Optional: target specific token
     source_tokens: Optional[List[int]] = None # For block_attention: tokens to block FROM
     target_tokens: Optional[List[int]] = None # For block_attention: tokens to block TO
+    all_layers: Optional[bool] = None # Apply to all layers instead of just one
 
 class InferenceRequest(BaseModel):
     text: str
@@ -120,25 +121,62 @@ def inference(req: InferenceRequest):
     
     for name, config in req.interventions.items():
         if config.type == "block_attention":
-            # Extract layer index from intervention name (e.g., "layer_5_attention" -> 5)
-            if name.startswith("layer_") and "_attention" in name:
-                layer_idx = int(name.split("_")[1])
+            # Extract layer index from intervention name
+            # Handles: "layer_5_attention", "all_layers_attention", or "all_layers_attention_0_to_1"
+            is_attention_intervention = (
+                (name.startswith("layer_") and "_attention" in name) or 
+                name.startswith("all_layers_attention")
+            )
+            
+            if is_attention_intervention:
+                # Determine which layers to apply to
+                if config.all_layers or name.startswith("all_layers_attention"):
+                    # Apply to all layers
+                    layer_indices = range(model.config.num_hidden_layers)
+                else:
+                    # Apply to single layer
+                    layer_idx_str = name.split("_")[1]
+                    layer_indices = [int(layer_idx_str)]
                 
-                # Create attention mask for this layer
-                # Mask shape: [seq_len, seq_len] with -inf where attention should be blocked
-                mask = torch.zeros((seq_len, seq_len), device=input_ids.device)
-                
-                if config.source_tokens and config.target_tokens:
-                    for src in config.source_tokens:
-                        for tgt in config.target_tokens:
-                            # Block attention from src to tgt
-                            if 0 <= src < seq_len and 0 <= tgt < seq_len:
-                                mask[tgt, src] = float("-inf")
-                
-                attention_masks[layer_idx] = mask
+                for layer_idx in layer_indices:
+                    # Create attention mask for this layer
+                    # Mask shape: [seq_len, seq_len] with -inf where attention should be blocked
+                    if layer_idx not in attention_masks:
+                        attention_masks[layer_idx] = torch.zeros((seq_len, seq_len), device=input_ids.device)
+                    
+                    mask = attention_masks[layer_idx]
+                    
+                    if config.source_tokens and config.target_tokens:
+                        for src in config.source_tokens:
+                            for tgt in config.target_tokens:
+                                # Block attention from src to tgt
+                                if 0 <= src < seq_len and 0 <= tgt < seq_len:
+                                    mask[tgt, src] = float("-inf")
         else:
             # Regular intervention (scale, zero, etc.)
-            intervention_hooks[name] = create_intervention_hook(config)
+            if config.all_layers and name != "embeddings":
+                # Apply to all layers - extract the location from the name
+                parts = name.split("_")
+                
+                # Handle both "all_layers_output" and "layer_5_output" formats
+                if parts[0] == "all" and len(parts) >= 3:
+                    # Format: all_layers_output -> extract "output"
+                    location = "_".join(parts[2:])
+                elif parts[0] == "layer" and len(parts) >= 3:
+                    # Format: layer_5_output -> extract "output"
+                    location = "_".join(parts[2:])
+                else:
+                    # Fallback: use the intervention name as-is for single layer
+                    intervention_hooks[name] = create_intervention_hook(config)
+                    continue
+                
+                # Apply to all layers
+                for layer_idx in range(model.config.num_hidden_layers):
+                    hook_name = f"layer_{layer_idx}_{location}"
+                    intervention_hooks[hook_name] = create_intervention_hook(config)
+            else:
+                # Single layer intervention
+                intervention_hooks[name] = create_intervention_hook(config)
 
     with torch.no_grad():
         outputs = model(input_ids, interventions=intervention_hooks, attention_masks=attention_masks)
@@ -195,13 +233,13 @@ def inference(req: InferenceRequest):
                 layer_name = "Final Output"
             
         # decoded[0] is List[List[Dict]] (seq_len -> top_k)
-        # The frontend expects a flat list of tokens (one per position), so we take top-1.
-        top1_predictions = [preds[0] for preds in decoded[0]]
+        # Return all top-k predictions for each position
+        all_predictions = decoded[0]  # This is already a list of lists
 
         lens_data.append({
             "layer_index": i,
             "layer_name": layer_name,
-            "predictions": top1_predictions 
+            "predictions": all_predictions 
         })
 
     # Store for saving

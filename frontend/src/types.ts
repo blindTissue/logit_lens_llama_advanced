@@ -7,7 +7,7 @@ export interface TokenPrediction {
 export interface LayerData {
   layer_index: number;
   layer_name: string;
-  predictions: TokenPrediction[];
+  predictions: TokenPrediction[][]; // Array of token positions, each with top-k predictions
 }
 
 export interface InferenceResponse {
@@ -22,6 +22,7 @@ export interface InterventionConfig {
   token_index?: number;
   source_tokens?: number[];
   target_tokens?: number[];
+  all_layers?: boolean;
 }
 
 export interface Interventions {

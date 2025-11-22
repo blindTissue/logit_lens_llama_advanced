@@ -14,7 +14,8 @@ function App() {
 
   const [selectedModel, setSelectedModel] = useState("meta-llama/Llama-3.2-3B");
   const [lensType, setLensType] = useState("block_output");
-  const [interventionType, setInterventionType] = useState<"scale" | "zero" | "block_attention">("zero");
+  const [attnAllLayers, setAttnAllLayers] = useState(false);
+  const [hoveredCell, setHoveredCell] = useState<{ layer: number, token: number } | null>(null);
 
   const loadingRef = useRef(false);
 
@@ -86,10 +87,10 @@ function App() {
     }
   };
 
-  const addIntervention = (layer: string, type: "scale" | "zero" | "block_attention", value: number = 0, tokenIndex?: number, sourceTokens?: number[], targetTokens?: number[]) => {
+  const addIntervention = (layer: string, type: "scale" | "zero" | "block_attention", value: number = 0, tokenIndex?: number, sourceTokens?: number[], targetTokens?: number[], allLayers?: boolean) => {
     setInterventions(prev => ({
       ...prev,
-      [layer]: { type, value, token_index: tokenIndex, source_tokens: sourceTokens, target_tokens: targetTokens }
+      [layer]: { type, value, token_index: tokenIndex, source_tokens: sourceTokens, target_tokens: targetTokens, all_layers: allLayers }
     }));
   };
 
@@ -139,7 +140,7 @@ function App() {
             </label>
 
             <div className="interventions">
-              <h3>Interventions</h3>
+              <h3>Active Interventions</h3>
               {Object.entries(interventions).map(([layer, config]) => (
                 <div key={layer} className="intervention-item flex-row" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
                   <span>
@@ -147,21 +148,24 @@ function App() {
                     {config.type === 'scale' && `(${config.value})`}
                     {config.type === 'block_attention' && config.source_tokens && config.target_tokens && ` (${config.source_tokens.join(',')} → ${config.target_tokens.join(',')})`}
                     {config.token_index !== undefined && ` @ Token ${config.token_index}`}
+                    {config.all_layers && ` [ALL LAYERS]`}
                   </span>
                   <button onClick={() => removeIntervention(layer)} style={{ padding: '4px 8px', fontSize: '0.8em' }}>X</button>
                 </div>
               ))}
 
-              <div className="add-intervention flex-row" style={{ marginTop: '1rem' }}>
-                <select id="layer-select">
-                  {/* Generate layer options dynamically based on loaded model */}
+              {/* Stream Interventions Section */}
+              <h4 style={{ marginTop: '1.5rem', marginBottom: '0.5rem' }}>Stream Interventions</h4>
+              <p style={{ fontSize: '0.85em', color: '#888', marginBottom: '0.5rem' }}>
+                Modify activation streams (zero out, scale, etc.)
+              </p>
+              <div className="add-intervention flex-row" style={{ marginTop: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <select id="stream-layer-select">
                   {results && results.logit_lens ? (
-                    // Calculate number of layers from the logit lens results
                     Array.from({ length: Math.floor((results.logit_lens.length - 1) / (lensType === "combined" ? 2 : 1)) }, (_, i) => (
                       <option key={i} value={i}>Layer {i}</option>
                     ))
                   ) : (
-                    // Default to 27 layers for Llama 3.2 3B if no results yet
                     Array.from({ length: 27 }, (_, i) => (
                       <option key={i} value={i}>Layer {i}</option>
                     ))
@@ -169,74 +173,117 @@ function App() {
                   <option value="embeddings">Embeddings</option>
                 </select>
 
-                <select id="location-select" style={{ display: interventionType === 'block_attention' ? 'none' : 'block' }}>
+                <select id="stream-location-select">
                   <option value="output">Block Output</option>
                   <option value="attn_output">Attn Output</option>
                   <option value="mlp_output">MLP Output</option>
                 </select>
 
-                <select id="type-select" value={interventionType} onChange={(e) => setInterventionType(e.target.value as "scale" | "zero" | "block_attention")}>
+                <select id="stream-type-select">
                   <option value="zero">Zero</option>
                   <option value="scale">Scale</option>
-                  <option value="block_attention">Block Attention</option>
                 </select>
-                {interventionType !== 'block_attention' && (
-                  <>
-                    <input type="number" id="val-input" placeholder="Value" defaultValue={0} step={0.1} style={{ width: '60px' }} />
-                    <input type="number" id="token-input" placeholder="Token Idx (opt)" style={{ width: '100px' }} />
-                  </>
-                )}
-                {interventionType === 'block_attention' && (
-                  <>
-                    <input type="text" id="source-tokens-input" placeholder="Source tokens (e.g., 0,1)" style={{ width: '140px' }} />
-                    <input type="text" id="target-tokens-input" placeholder="Target tokens (e.g., 3,4)" style={{ width: '140px' }} />
-                  </>
-                )}
+
+                <input type="number" id="stream-val-input" placeholder="Value" defaultValue={0} step={0.1} style={{ width: '60px' }} />
+                <input type="number" id="stream-token-input" placeholder="Token Idx (opt)" style={{ width: '100px' }} />
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <input type="checkbox" id="stream-all-layers" />
+                  Apply to all layers
+                </label>
+
                 <button onClick={() => {
-                  const layerSelect = document.getElementById('layer-select') as HTMLSelectElement;
+                  const layerSelect = document.getElementById('stream-layer-select') as HTMLSelectElement;
+                  const locationSelect = document.getElementById('stream-location-select') as HTMLSelectElement;
+                  const typeSelect = document.getElementById('stream-type-select') as HTMLSelectElement;
                   const layer = layerSelect.value;
+                  const location = locationSelect.value;
+                  const type = typeSelect.value as "zero" | "scale";
+                  const val = parseFloat((document.getElementById('stream-val-input') as HTMLInputElement).value);
+                  const tokenInput = (document.getElementById('stream-token-input') as HTMLInputElement).value;
+                  const tokenIndex = tokenInput ? parseInt(tokenInput) : undefined;
+                  const allLayers = (document.getElementById('stream-all-layers') as HTMLInputElement).checked;
 
                   let interventionKey: string;
-                  let sourceTokens: number[] | undefined;
-                  let targetTokens: number[] | undefined;
-                  let val = 0;
-                  let tokenIndex: number | undefined;
-
-                  if (interventionType === 'block_attention') {
-                    // For attention blocking, use layer_X_attention format
-                    if (layer === "embeddings") {
-                      alert("Cannot block attention on embeddings");
-                      return;
-                    }
-                    interventionKey = `layer_${layer}_attention`;
-
-                    const sourceInput = (document.getElementById('source-tokens-input') as HTMLInputElement).value;
-                    const targetInput = (document.getElementById('target-tokens-input') as HTMLInputElement).value;
-
-                    if (!sourceInput || !targetInput) {
-                      alert("Please specify both source and target tokens");
-                      return;
-                    }
-
-                    sourceTokens = sourceInput.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
-                    targetTokens = targetInput.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+                  if (allLayers) {
+                    // Use generic key for all layers
+                    interventionKey = `all_layers_${location}`;
+                  } else if (layer === "embeddings") {
+                    interventionKey = "embeddings";
                   } else {
-                    // Regular intervention
-                    const locationSelect = document.getElementById('location-select') as HTMLSelectElement;
-                    val = parseFloat((document.getElementById('val-input') as HTMLInputElement).value);
-                    const tokenInput = (document.getElementById('token-input') as HTMLInputElement).value;
-                    tokenIndex = tokenInput ? parseInt(tokenInput) : undefined;
+                    interventionKey = `layer_${layer}_${location}`;
+                  }
 
-                    const location = locationSelect.value;
-                    if (layer === "embeddings") {
-                      interventionKey = "embeddings";
-                    } else {
-                      interventionKey = `layer_${layer}_${location}`;
+                  addIntervention(interventionKey, type, val, tokenIndex, undefined, undefined, allLayers);
+                }} className="primary-btn">Add Stream Intervention</button>
+              </div>
+
+              {/* Attention Interventions Section */}
+              <h4 style={{ marginTop: '1.5rem', marginBottom: '0.5rem' }}>Attention Interventions</h4>
+              <p style={{ fontSize: '0.85em', color: '#888', marginBottom: '0.5rem' }}>
+                Block attention connections between tokens
+              </p>
+              <div className="add-intervention flex-row" style={{ marginTop: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <select id="attn-layer-select" disabled={attnAllLayers}>
+                  {results && results.logit_lens ? (
+                    Array.from({ length: Math.floor((results.logit_lens.length - 1) / (lensType === "combined" ? 2 : 1)) }, (_, i) => (
+                      <option key={i} value={i}>Layer {i}</option>
+                    ))
+                  ) : (
+                    Array.from({ length: 27 }, (_, i) => (
+                      <option key={i} value={i}>Layer {i}</option>
+                    ))
+                  )}
+                </select>
+
+                <input type="text" id="attn-source-tokens-input" placeholder="Source tokens (e.g., 0,1)" style={{ width: '140px' }} />
+                <input type="text" id="attn-target-tokens-input" placeholder="Target tokens (e.g., 3,4)" style={{ width: '140px' }} />
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                  <input
+                    type="checkbox"
+                    id="attn-all-layers"
+                    checked={attnAllLayers}
+                    onChange={(e) => setAttnAllLayers(e.target.checked)}
+                  />
+                  Apply to all layers
+                </label>
+
+                <button onClick={() => {
+                  const layerSelect = document.getElementById('attn-layer-select') as HTMLSelectElement;
+                  const layer = layerSelect.value;
+                  const sourceInput = (document.getElementById('attn-source-tokens-input') as HTMLInputElement).value;
+                  const targetInput = (document.getElementById('attn-target-tokens-input') as HTMLInputElement).value;
+
+                  if (!sourceInput || !targetInput) {
+                    alert("Please specify both source and target tokens");
+                    return;
+                  }
+
+                  const sourceTokens = sourceInput.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+                  const targetTokens = targetInput.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+                  const allLayers = (document.getElementById('attn-all-layers') as HTMLInputElement).checked;
+
+                  // Validate causal attention: source must be <= target (can't attend to future tokens)
+                  for (const src of sourceTokens) {
+                    for (const tgt of targetTokens) {
+                      if (src > tgt) {
+                        alert(`Warning: Source token ${src} > target token ${tgt}. In causal attention, tokens can only attend to current or previous positions (source <= target).`);
+                        return;
+                      }
                     }
                   }
 
-                  addIntervention(interventionKey, interventionType, val, tokenIndex, sourceTokens, targetTokens);
-                }}>Add</button>
+                  // Use unique key for all layers to allow multiple interventions
+                  // Format: all_layers_attention_0_1 (source_target)
+                  let interventionKey: string;
+                  if (allLayers) {
+                    const srcStr = sourceTokens.join('_');
+                    const tgtStr = targetTokens.join('_');
+                    interventionKey = `all_layers_attention_${srcStr}_to_${tgtStr}`;
+                  } else {
+                    interventionKey = `layer_${layer}_attention`;
+                  }
+                  addIntervention(interventionKey, "block_attention", 0, undefined, sourceTokens, targetTokens, allLayers);
+                }} className="primary-btn">Block Attention Flow</button>
               </div>
             </div>
 
@@ -267,21 +314,69 @@ function App() {
                       <td style={{ padding: '8px', borderBottom: '1px solid #333', fontSize: '0.9em', color: '#888', position: 'sticky', left: 0, background: 'var(--surface-color)', zIndex: 1 }}>
                         {layer.layer_name}
                       </td>
-                      {layer.predictions.map((p, i) => (
-                        <td key={i} style={{ padding: '4px', borderBottom: '1px solid #333', textAlign: 'center' }}>
-                          <div className="token-box" style={{
-                            opacity: Math.max(0.3, p.prob * 2),
-                            border: i === 0 ? '1px solid var(--primary-color)' : 'none',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            alignItems: 'center',
-                            minWidth: '60px'
-                          }}>
-                            <span style={{ fontWeight: 'bold' }}>{p.token}</span>
-                            <span style={{ fontSize: '0.7em', color: '#aaa' }}>{p.prob.toFixed(2)}</span>
-                          </div>
-                        </td>
-                      ))}
+                      {layer.predictions.map((preds, i) => {
+                        // preds is now an array of 5 predictions for this token position
+                        const topPred = preds[0]; // Show top prediction in the cell
+                        const isHovered = hoveredCell?.layer === layer.layer_index && hoveredCell?.token === i;
+                        return (
+                          <td
+                            key={i}
+                            style={{ padding: '4px', borderBottom: '1px solid #333', textAlign: 'center', position: 'relative' }}
+                            onMouseEnter={() => setHoveredCell({ layer: layer.layer_index, token: i })}
+                            onMouseLeave={() => setHoveredCell(null)}
+                          >
+                            <div className="token-box" style={{
+                              opacity: Math.max(0.3, topPred.prob * 2),
+                              border: i === 0 ? '1px solid var(--primary-color)' : 'none',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              alignItems: 'center',
+                              minWidth: '60px'
+                            }}>
+                              <span style={{ fontWeight: 'bold' }}>{topPred.token}</span>
+                              <span style={{ fontSize: '0.7em', color: '#aaa' }}>{topPred.prob.toFixed(2)}</span>
+                            </div>
+
+                            {/* Tooltip showing top 5 predictions */}
+                            {isHovered && (
+                              <div style={{
+                                position: 'absolute',
+                                top: '100%',
+                                left: '50%',
+                                transform: 'translateX(-50%)',
+                                backgroundColor: '#1a1a1a',
+                                border: '1px solid #444',
+                                borderRadius: '4px',
+                                padding: '8px',
+                                zIndex: 1000,
+                                minWidth: '180px',
+                                boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
+                                marginTop: '4px',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                <div style={{ fontSize: '0.8em', fontWeight: 'bold', marginBottom: '6px', color: '#aaa' }}>
+                                  {layer.layer_name} - Pos {i}
+                                </div>
+                                {preds.map((pred, idx) => (
+                                  <div key={idx} style={{
+                                    fontSize: '0.75em',
+                                    padding: '2px 0',
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    gap: '12px',
+                                    color: idx === 0 ? '#fff' : '#ccc'
+                                  }}>
+                                    <span style={{ fontWeight: idx === 0 ? 'bold' : 'normal' }}>
+                                      {idx + 1}. {pred.token}
+                                    </span>
+                                    <span style={{ color: '#888' }}>{(pred.prob * 100).toFixed(1)}%</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
