@@ -16,10 +16,12 @@ export interface InferenceResponse {
 }
 
 export interface InterventionConfig {
-  type: "scale" | "zero" | "add";
+  type: "scale" | "zero" | "add" | "block_attention";
   value?: number;
   vector?: number[];
   token_index?: number;
+  source_tokens?: number[];
+  target_tokens?: number[];
 }
 
 export interface Interventions {

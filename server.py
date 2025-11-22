@@ -28,10 +28,12 @@ class LoadModelRequest(BaseModel):
     model_name: str = "meta-llama/Llama-3.2-3B"
 
 class InterventionConfig(BaseModel):
-    type: str # "scale", "zero", "add"
+    type: str # "scale", "zero", "add", "block_attention"
     value: Optional[float] = None # For scale
     vector: Optional[List[float]] = None # For add
     token_index: Optional[int] = None # Optional: target specific token
+    source_tokens: Optional[List[int]] = None # For block_attention: tokens to block FROM
+    target_tokens: Optional[List[int]] = None # For block_attention: tokens to block TO
 
 class InferenceRequest(BaseModel):
     text: str
@@ -110,14 +112,36 @@ def inference(req: InferenceRequest):
         raise HTTPException(status_code=400, detail="Model not loaded")
 
     input_ids = tokenizer.encode(req.text, return_tensors="pt").to(model.embed_tokens.weight.device)
+    seq_len = input_ids.shape[1]
     
     # Parse interventions
     intervention_hooks = {}
+    attention_masks = {}  # Dict[layer_idx, mask_tensor]
+    
     for name, config in req.interventions.items():
-        intervention_hooks[name] = create_intervention_hook(config)
+        if config.type == "block_attention":
+            # Extract layer index from intervention name (e.g., "layer_5_attention" -> 5)
+            if name.startswith("layer_") and "_attention" in name:
+                layer_idx = int(name.split("_")[1])
+                
+                # Create attention mask for this layer
+                # Mask shape: [seq_len, seq_len] with -inf where attention should be blocked
+                mask = torch.zeros((seq_len, seq_len), device=input_ids.device)
+                
+                if config.source_tokens and config.target_tokens:
+                    for src in config.source_tokens:
+                        for tgt in config.target_tokens:
+                            # Block attention from src to tgt
+                            if 0 <= src < seq_len and 0 <= tgt < seq_len:
+                                mask[tgt, src] = float("-inf")
+                
+                attention_masks[layer_idx] = mask
+        else:
+            # Regular intervention (scale, zero, etc.)
+            intervention_hooks[name] = create_intervention_hook(config)
 
     with torch.no_grad():
-        outputs = model(input_ids, interventions=intervention_hooks)
+        outputs = model(input_ids, interventions=intervention_hooks, attention_masks=attention_masks)
     
     # Process LogitLens
     try:

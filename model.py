@@ -111,7 +111,7 @@ class LlamaAttention(nn.Module):
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
         self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings, base=self.rope_theta)
 
-    def forward(self, hidden_states, position_ids, past_key_value=None, use_cache=False):
+    def forward(self, hidden_states, position_ids, past_key_value=None, use_cache=False, attention_mask=None):
         bsz, q_len, _ = hidden_states.size()
 
         query_states = self.q_proj(hidden_states)
@@ -150,6 +150,18 @@ class LlamaAttention(nn.Module):
              mask = torch.full((q_len, q_len), float("-inf"), device=hidden_states.device)
              mask = torch.triu(mask, diagonal=1)
              attn_weights = attn_weights + mask
+        
+        # Apply custom attention mask if provided
+        if attention_mask is not None:
+            # attention_mask shape: [batch, q_len, kv_seq_len] or [q_len, kv_seq_len]
+            # attn_weights shape: [batch, num_heads, q_len, kv_seq_len]
+            if attention_mask.dim() == 2:
+                # Broadcast to [batch, num_heads, q_len, kv_seq_len]
+                attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)
+            elif attention_mask.dim() == 3:
+                # Broadcast to [batch, num_heads, q_len, kv_seq_len]
+                attention_mask = attention_mask.unsqueeze(1)
+            attn_weights = attn_weights + attention_mask
 
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_output = torch.matmul(attn_weights, value_states)
@@ -171,7 +183,7 @@ class LlamaDecoderLayer(nn.Module):
         self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.layer_idx = layer_idx
 
-    def forward(self, hidden_states, position_ids, past_key_value=None, use_cache=False, interventions=None):
+    def forward(self, hidden_states, position_ids, past_key_value=None, use_cache=False, interventions=None, attention_mask=None):
         # Residual Connection 1
         residual = hidden_states
         
@@ -184,6 +196,7 @@ class LlamaDecoderLayer(nn.Module):
             position_ids=position_ids,
             past_key_value=past_key_value,
             use_cache=use_cache,
+            attention_mask=attention_mask,
         )
         
         # Intervention Point: Post-Attention (before adding residual)
@@ -230,7 +243,7 @@ class LlamaModel(nn.Module):
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-    def forward(self, input_ids, position_ids=None, past_key_values=None, use_cache=True, interventions=None):
+    def forward(self, input_ids, position_ids=None, past_key_values=None, use_cache=True, interventions=None, attention_masks=None):
         output_attentions = False
         output_hidden_states = True # We always want these for LogitLens
         
@@ -252,13 +265,17 @@ class LlamaModel(nn.Module):
         for idx, decoder_layer in enumerate(self.layers):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
+            
+            # Get attention mask for this layer if provided
+            layer_attention_mask = attention_masks.get(idx) if attention_masks else None
 
             layer_outputs = decoder_layer(
                 hidden_states,
                 position_ids=position_ids,
                 past_key_value=past_key_values[idx] if past_key_values is not None else None,
                 use_cache=use_cache,
-                interventions=interventions
+                interventions=interventions,
+                attention_mask=layer_attention_mask
             )
 
             hidden_states = layer_outputs[0]
