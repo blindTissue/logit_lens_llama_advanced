@@ -12,7 +12,8 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [modelLoaded, setModelLoaded] = useState(false);
 
-  const [selectedModel, setSelectedModel] = useState("TinyLlama/TinyLlama-1.1B-Chat-v1.0");
+  const [selectedModel, setSelectedModel] = useState("meta-llama/Llama-3.2-3B");
+  const [lensType, setLensType] = useState("block_output");
 
   const loadingRef = useRef(false);
 
@@ -66,7 +67,8 @@ function App() {
       setLoading(true);
       const res = await axios.post(`${API_URL}/inference`, {
         text,
-        interventions
+        interventions,
+        lens_type: lensType
       });
       setResults(res.data);
     } catch (err: any) {
@@ -102,11 +104,19 @@ function App() {
     <div className="app-container">
       <header>
         <h1>LogitLens Llama Advanced</h1>
-        <div className="header-controls flex-row" style={{ alignItems: 'center' }}>
+        <div className="header-controls flex-row" style={{ alignItems: 'center', gap: '1rem' }}>
           <select value={selectedModel} onChange={handleModelChange} disabled={loading}>
-            <option value="TinyLlama/TinyLlama-1.1B-Chat-v1.0">TinyLlama 1.1B</option>
+            <option value="meta-llama/Llama-3.2-3B">Llama 3.2 3B</option>
             <option value="meta-llama/Llama-3.2-1B">Llama 3.2 1B</option>
+            <option value="TinyLlama/TinyLlama-1.1B-Chat-v1.0">TinyLlama 1.1B</option>
           </select>
+
+          <select value={lensType} onChange={e => setLensType(e.target.value)} disabled={loading}>
+            <option value="block_output">Block Output (Standard)</option>
+            <option value="post_attention">Post-Attention</option>
+            <option value="combined">Combined (Most Detailed)</option>
+          </select>
+
           <div className="status">
             Status: {loading ? "Loading..." : modelLoaded ? "Ready" : "Not Loaded"}
           </div>
@@ -142,11 +152,27 @@ function App() {
 
               <div className="add-intervention flex-row" style={{ marginTop: '1rem' }}>
                 <select id="layer-select">
-                  {Array.from({ length: 22 }, (_, i) => (
-                    <option key={i} value={`layer_${i}_output`}>Layer {i} Output</option>
-                  ))}
+                  {/* Generate layer options dynamically based on loaded model */}
+                  {results && results.logit_lens ? (
+                    // Calculate number of layers from the logit lens results
+                    Array.from({ length: Math.floor((results.logit_lens.length - 1) / (lensType === "combined" ? 2 : 1)) }, (_, i) => (
+                      <option key={i} value={i}>Layer {i}</option>
+                    ))
+                  ) : (
+                    // Default to 27 layers for Llama 3.2 3B if no results yet
+                    Array.from({ length: 27 }, (_, i) => (
+                      <option key={i} value={i}>Layer {i}</option>
+                    ))
+                  )}
                   <option value="embeddings">Embeddings</option>
                 </select>
+
+                <select id="location-select">
+                  <option value="output">Block Output</option>
+                  <option value="attn_output">Attn Output</option>
+                  <option value="mlp_output">MLP Output</option>
+                </select>
+
                 <select id="type-select">
                   <option value="zero">Zero</option>
                   <option value="scale">Scale</option>
@@ -154,12 +180,25 @@ function App() {
                 <input type="number" id="val-input" placeholder="Value" defaultValue={0} step={0.1} style={{ width: '60px' }} />
                 <input type="number" id="token-input" placeholder="Token Idx (opt)" style={{ width: '100px' }} />
                 <button onClick={() => {
-                  const layer = (document.getElementById('layer-select') as HTMLSelectElement).value;
+                  const layerSelect = document.getElementById('layer-select') as HTMLSelectElement;
+                  const locationSelect = document.getElementById('location-select') as HTMLSelectElement;
                   const type = (document.getElementById('type-select') as HTMLSelectElement).value as "zero" | "scale";
                   const val = parseFloat((document.getElementById('val-input') as HTMLInputElement).value);
                   const tokenInput = (document.getElementById('token-input') as HTMLInputElement).value;
                   const tokenIndex = tokenInput ? parseInt(tokenInput) : undefined;
-                  addIntervention(layer, type, val, tokenIndex);
+
+                  // Build the intervention key
+                  const layer = layerSelect.value;
+                  const location = locationSelect.value;
+                  let interventionKey: string;
+
+                  if (layer === "embeddings") {
+                    interventionKey = "embeddings";
+                  } else {
+                    interventionKey = `layer_${layer}_${location}`;
+                  }
+
+                  addIntervention(interventionKey, type, val, tokenIndex);
                 }}>Add</button>
               </div>
             </div>

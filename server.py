@@ -25,7 +25,7 @@ tokenizer = None
 model_config = None
 
 class LoadModelRequest(BaseModel):
-    model_name: str = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    model_name: str = "meta-llama/Llama-3.2-3B"
 
 class InterventionConfig(BaseModel):
     type: str # "scale", "zero", "add"
@@ -36,6 +36,7 @@ class InterventionConfig(BaseModel):
 class InferenceRequest(BaseModel):
     text: str
     interventions: Dict[str, InterventionConfig] = {} # key: hook_name (e.g. "layer_0_output")
+    lens_type: str = "block_output" # "block_output" or "post_attention"
 
 class SaveStateRequest(BaseModel):
     filename: str
@@ -119,21 +120,55 @@ def inference(req: InferenceRequest):
         outputs = model(input_ids, interventions=intervention_hooks)
     
     # Process LogitLens
-    hidden_states = outputs["hidden_states"] # Tuple of (batch, seq, hidden)
+    try:
+        if req.lens_type == "post_attention":
+            # embeddings + post_attention_states + final_norm (not really applicable for final norm but we can keep it)
+            # actually post_attention_states has N items.
+            # We should probably include embeddings as the "start".
+            states_to_process = [outputs["hidden_states"][0]] + list(outputs["post_attention_states"])
+            # Note: post_attention_states doesn't include the final output of the model, 
+            # but usually logit lens includes the final output.
+            # Let's append the final hidden state as well to complete the picture
+            states_to_process.append(outputs["hidden_states"][-1])
+        elif req.lens_type == "combined":
+            # Interleave post-attention and block output states
+            states_to_process = [outputs["hidden_states"][0]]  # Start with embeddings
+            for i in range(len(outputs["post_attention_states"])):
+                states_to_process.append(outputs["post_attention_states"][i])  # Post-attn
+                states_to_process.append(outputs["hidden_states"][i + 1])  # Block output
+        else:
+            states_to_process = outputs["hidden_states"] # Tuple of (batch, seq, hidden)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error processing states: {str(e)}")
     
     lens_data = []
     
-    # We want to see predictions at each layer
-    # hidden_states includes embeddings (idx 0) + layers + final norm
-    
-    for i, h in enumerate(hidden_states):
+    for i, h in enumerate(states_to_process):
         # Project
         logits = compute_logit_lens(h, model.lm_head, model.norm)
         decoded = decode_top_k(logits, tokenizer, k=5)
         
-        layer_name = f"Layer {i-1}" if i > 0 else "Embeddings"
-        if i == len(hidden_states) - 1:
-            layer_name = "Final Output"
+        if req.lens_type == "post_attention":
+             if i == 0: layer_name = "Embeddings"
+             elif i == len(states_to_process) - 1: layer_name = "Final Output"
+             else: layer_name = f"L{i-1} Post-Attn"
+        elif req.lens_type == "combined":
+            if i == 0:
+                layer_name = "Embeddings"
+            else:
+                # Calculate which layer we're in
+                layer_num = (i - 1) // 2
+                is_post_attn = (i - 1) % 2 == 0
+                if is_post_attn:
+                    layer_name = f"L{layer_num} Post-Attn"
+                else:
+                    layer_name = f"L{layer_num} Block Out"
+        else:
+            layer_name = f"Layer {i-1}" if i > 0 else "Embeddings"
+            if i == len(states_to_process) - 1:
+                layer_name = "Final Output"
             
         # decoded[0] is List[List[Dict]] (seq_len -> top_k)
         # The frontend expects a flat list of tokens (one per position), so we take top-1.
@@ -146,7 +181,7 @@ def inference(req: InferenceRequest):
         })
 
     # Store for saving
-    last_run_state["hidden_states"] = [h.cpu().numpy() for h in hidden_states]
+    last_run_state["hidden_states"] = [h.cpu().numpy() for h in states_to_process]
     last_run_state["logits"] = outputs["logits"].cpu().numpy()
     last_run_state["text"] = req.text
 

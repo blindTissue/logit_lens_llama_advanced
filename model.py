@@ -193,6 +193,9 @@ class LlamaDecoderLayer(nn.Module):
         # Residual Add 1
         hidden_states = residual + attn_outputs
 
+        # Post-Attention State (for fine-grained LogitLens)
+        post_attention_state = hidden_states
+
         # Residual Connection 2
         residual = hidden_states
 
@@ -213,7 +216,7 @@ class LlamaDecoderLayer(nn.Module):
         if interventions and f"layer_{self.layer_idx}_output" in interventions:
              hidden_states = interventions[f"layer_{self.layer_idx}_output"](hidden_states)
 
-        return hidden_states, past_key_value
+        return hidden_states, past_key_value, post_attention_state
 
 class LlamaModel(nn.Module):
     def __init__(self, config):
@@ -243,6 +246,7 @@ class LlamaModel(nn.Module):
         hidden_states = inputs_embeds
         
         all_hidden_states = () if output_hidden_states else None
+        all_post_attention_states = () if output_hidden_states else None
         next_decoder_cache = () if use_cache else None
 
         for idx, decoder_layer in enumerate(self.layers):
@@ -258,6 +262,9 @@ class LlamaModel(nn.Module):
             )
 
             hidden_states = layer_outputs[0]
+            
+            if output_hidden_states:
+                all_post_attention_states += (layer_outputs[2],)
 
             if use_cache:
                 next_decoder_cache += (layer_outputs[1],)
@@ -272,7 +279,8 @@ class LlamaModel(nn.Module):
         return {
             "logits": logits,
             "past_key_values": next_decoder_cache,
-            "hidden_states": all_hidden_states
+            "hidden_states": all_hidden_states,
+            "post_attention_states": all_post_attention_states
         }
 
     @classmethod
