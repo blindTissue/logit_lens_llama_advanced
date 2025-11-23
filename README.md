@@ -1,7 +1,6 @@
 # Logit Lens Llama Advanced
 
-An interactive tool to analyze and intervene on Llama model internal states using Logit Lens.
-
+An interactive tool to analyze and intervene on Llama model internal states.
 
 ## Demo
 
@@ -14,10 +13,12 @@ An interactive tool to analyze and intervene on Llama model internal states usin
 - **Interventions**: Modify internal streams (Residual, Attention, MLP)
     - **Zero**: Zero out specific vector streams.
     - **Scale**: Scale vectors by a factor.
-    - **Block Attention**: Prevent information flow between specific tokens or across layers.
+    - **Block Attention**: Prevent information flow between specific tokens on a layer or across layers.
         - FYI: Attention blocking mechanism happens before softmax, sending -inf to attention scores. Attention scores will add up to 1.
 - **Session Management**: Save and load your analysis sessions (config + full tensor state).
-    - Tensor States are shared for futher experiments (L2 norm, cosine similarity, etc.)
+    - Sessions will be saved to `saved_states/` directory. example saved states are included in the repository.
+    - Interventions, LogitLens results are saved in the `config.json` file
+    - Activations are saved in the `tensors.npz` file. These can be used for futher experiments (L2 norm, cosine similarity, etc.)
 
 ## Installation
 
