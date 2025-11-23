@@ -12,3 +12,4 @@ wheels/
 # User data
 saved_states/
 .DS_Store
+stuff.ipynb

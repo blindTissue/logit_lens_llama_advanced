@@ -10,12 +10,14 @@ An interactive tool to analyze and intervene on Llama model internal states usin
 ## Features
 
 - **Interactive Logit Lens**: Visualize the model's prediction at every layer (Embeddings -> Layers -> Output).
-- **Interventions**: Modify internal streams (Residual, Attention, MLP) in real-time.
-    - **Zero**: Zero out specific vectors.
+    - Optionn to include or exclude Post Attention LogitLens.
+- **Interventions**: Modify internal streams (Residual, Attention, MLP)
+    - **Zero**: Zero out specific vector streams.
     - **Scale**: Scale vectors by a factor.
     - **Block Attention**: Prevent information flow between specific tokens or across layers.
         - FYI: Attention blocking mechanism happens before softmax, sending -inf to attention scores. Attention scores will add up to 1.
 - **Session Management**: Save and load your analysis sessions (config + full tensor state).
+    - Tensor States are shared for futher experiments (L2 norm, cosine similarity, etc.)
 
 ## Installation
 
