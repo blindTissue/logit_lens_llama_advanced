@@ -2,6 +2,11 @@
 
 An interactive tool to analyze and intervene on Llama model internal states using Logit Lens.
 
+
+## Demo
+
+![demo](banner.gif)
+
 ## Features
 
 - **Interactive Logit Lens**: Visualize the model's prediction at every layer (Embeddings -> Layers -> Output).
@@ -9,6 +14,7 @@ An interactive tool to analyze and intervene on Llama model internal states usin
     - **Zero**: Zero out specific vectors.
     - **Scale**: Scale vectors by a factor.
     - **Block Attention**: Prevent information flow between specific tokens or across layers.
+        - FYI: Attention blocking mechanism happens before softmax, sending -inf to attention scores. Attention scores will add up to 1.
 - **Session Management**: Save and load your analysis sessions (config + full tensor state).
 
 ## Installation
