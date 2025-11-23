@@ -104,6 +104,7 @@ function App() {
 
   const [sessions, setSessions] = useState<{ id: string, name: string, timestamp: string }[]>([]);
   const [showLoadModal, setShowLoadModal] = useState(false);
+  const [streamType, setStreamType] = useState<"zero" | "scale">("zero");
 
   const saveSession = async () => {
     const name = prompt("Enter a name for this session (optional):");
@@ -285,12 +286,14 @@ function App() {
                   <option value="mlp_output">MLP Output</option>
                 </select>
 
-                <select id="stream-type-select">
+                <select id="stream-type-select" value={streamType} onChange={(e) => setStreamType(e.target.value as "zero" | "scale")}>
                   <option value="zero">Zero</option>
                   <option value="scale">Scale</option>
                 </select>
 
-                <input type="number" id="stream-val-input" placeholder="Value" defaultValue={0} step={0.1} style={{ width: '60px' }} />
+                {streamType === 'scale' && (
+                  <input type="number" id="stream-val-input" placeholder="Value" defaultValue={0} step={0.1} style={{ width: '60px' }} />
+                )}
                 <input type="number" id="stream-token-input" placeholder="Token Idx (opt)" style={{ width: '100px' }} />
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                   <input type="checkbox" id="stream-all-layers" />
@@ -300,11 +303,16 @@ function App() {
                 <button onClick={() => {
                   const layerSelect = document.getElementById('stream-layer-select') as HTMLSelectElement;
                   const locationSelect = document.getElementById('stream-location-select') as HTMLSelectElement;
-                  const typeSelect = document.getElementById('stream-type-select') as HTMLSelectElement;
+                  // const typeSelect = document.getElementById('stream-type-select') as HTMLSelectElement; // No longer needed
                   const layer = layerSelect.value;
                   const location = locationSelect.value;
-                  const type = typeSelect.value as "zero" | "scale";
-                  const val = parseFloat((document.getElementById('stream-val-input') as HTMLInputElement).value);
+                  const type = streamType;
+
+                  let val = 0;
+                  if (type === 'scale') {
+                    const valInput = document.getElementById('stream-val-input') as HTMLInputElement;
+                    val = valInput ? parseFloat(valInput.value) : 0;
+                  }
                   const tokenInput = (document.getElementById('stream-token-input') as HTMLInputElement).value;
                   const tokenIndex = tokenInput ? parseInt(tokenInput) : undefined;
                   const allLayers = (document.getElementById('stream-all-layers') as HTMLInputElement).checked;
@@ -341,8 +349,8 @@ function App() {
                   )}
                 </select>
 
-                <input type="text" id="attn-source-tokens-input" placeholder="Source tokens (e.g., 0,1)" style={{ width: '140px' }} />
-                <input type="text" id="attn-target-tokens-input" placeholder="Target tokens (e.g., 3,4)" style={{ width: '140px' }} />
+                <input type="text" id="attn-source-tokens-input" placeholder="Source tokens (e.g., 0)" style={{ width: '140px' }} />
+                <input type="text" id="attn-target-tokens-input" placeholder="Target tokens (e.g., 3)" style={{ width: '140px' }} />
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                   <input
                     type="checkbox"
