@@ -111,7 +111,7 @@ class LlamaAttention(nn.Module):
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
         self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings, base=self.rope_theta)
 
-    def forward(self, hidden_states, position_ids, past_key_value=None, use_cache=False, attention_mask=None):
+    def forward(self, hidden_states, position_ids, past_key_value=None, use_cache=False, attention_mask=None, output_attentions=False):
         bsz, q_len, _ = hidden_states.size()
 
         query_states = self.q_proj(hidden_states)
@@ -171,7 +171,10 @@ class LlamaAttention(nn.Module):
 
         attn_output = self.o_proj(attn_output)
 
-        return attn_output, past_key_value
+        if output_attentions:
+            return attn_output, past_key_value, attn_weights
+        
+        return attn_output, past_key_value, None
 
 class LlamaDecoderLayer(nn.Module):
     def __init__(self, config, layer_idx):
@@ -183,7 +186,7 @@ class LlamaDecoderLayer(nn.Module):
         self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.layer_idx = layer_idx
 
-    def forward(self, hidden_states, position_ids, past_key_value=None, use_cache=False, interventions=None, attention_mask=None):
+    def forward(self, hidden_states, position_ids, past_key_value=None, use_cache=False, interventions=None, attention_mask=None, output_attentions=False):
         # Residual Connection 1
         residual = hidden_states
         
@@ -191,12 +194,13 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
         
         # Attention
-        attn_outputs, past_key_value = self.self_attn(
+        attn_outputs, past_key_value, attn_weights = self.self_attn(
             hidden_states=hidden_states,
             position_ids=position_ids,
             past_key_value=past_key_value,
             use_cache=use_cache,
             attention_mask=attention_mask,
+            output_attentions=output_attentions
         )
         
         # Intervention Point: Post-Attention (before adding residual)
@@ -229,7 +233,7 @@ class LlamaDecoderLayer(nn.Module):
         if interventions and f"layer_{self.layer_idx}_output" in interventions:
              hidden_states = interventions[f"layer_{self.layer_idx}_output"](hidden_states)
 
-        return hidden_states, past_key_value, post_attention_state
+        return hidden_states, past_key_value, post_attention_state, attn_weights
 
 class LlamaModel(nn.Module):
     def __init__(self, config):
@@ -243,8 +247,8 @@ class LlamaModel(nn.Module):
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
-    def forward(self, input_ids, position_ids=None, past_key_values=None, use_cache=True, interventions=None, attention_masks=None):
-        output_attentions = False
+    def forward(self, input_ids, position_ids=None, past_key_values=None, use_cache=True, interventions=None, attention_masks=None, output_attentions=False):
+        output_attentions = output_attentions or False
         output_hidden_states = True # We always want these for LogitLens
         
         if position_ids is None:
@@ -260,6 +264,7 @@ class LlamaModel(nn.Module):
         
         all_hidden_states = () if output_hidden_states else None
         all_post_attention_states = () if output_hidden_states else None
+        all_attentions = () if output_attentions else None
         next_decoder_cache = () if use_cache else None
 
         for idx, decoder_layer in enumerate(self.layers):
@@ -275,13 +280,18 @@ class LlamaModel(nn.Module):
                 past_key_value=past_key_values[idx] if past_key_values is not None else None,
                 use_cache=use_cache,
                 interventions=interventions,
-                attention_mask=layer_attention_mask
+
+                attention_mask=layer_attention_mask,
+                output_attentions=output_attentions
             )
 
             hidden_states = layer_outputs[0]
             
             if output_hidden_states:
                 all_post_attention_states += (layer_outputs[2],)
+
+            if output_attentions:
+                all_attentions += (layer_outputs[3],)
 
             if use_cache:
                 next_decoder_cache += (layer_outputs[1],)
@@ -297,7 +307,9 @@ class LlamaModel(nn.Module):
             "logits": logits,
             "past_key_values": next_decoder_cache,
             "hidden_states": all_hidden_states,
-            "post_attention_states": all_post_attention_states
+            "hidden_states": all_hidden_states,
+            "post_attention_states": all_post_attention_states,
+            "attentions": all_attentions
         }
 
     @classmethod

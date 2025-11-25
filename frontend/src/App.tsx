@@ -3,6 +3,47 @@ import axios from 'axios'
 import './App.css'
 import type { InferenceResponse, Interventions } from './types'
 
+// Simple Heatmap Component
+const AttentionHeatmap = ({ data, tokens, title, size = 30 }: { data: number[][], tokens: string[], title?: string, size?: number }) => {
+  if (!data || !data.length) return null;
+
+  return (
+    <div className="attention-heatmap" style={{ overflowX: 'auto', marginTop: '10px', display: 'inline-block', marginRight: '10px' }}>
+      {title && <h4 style={{ margin: '0 0 5px 0', fontSize: '0.9em' }}>{title}</h4>}
+      <table style={{ borderCollapse: 'collapse', fontSize: '0.8em' }}>
+        <thead>
+          <tr>
+            <th style={{ padding: '2px' }}></th>
+            {tokens.map((tok, i) => (
+              <th key={i} style={{ padding: '2px', writingMode: 'vertical-rl', transform: 'rotate(180deg)', minHeight: '40px', fontSize: '0.7em' }}>
+                {tok.slice(0, 10)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((row, i) => (
+            <tr key={i}>
+              <td style={{ padding: '2px', textAlign: 'right', whiteSpace: 'nowrap', fontSize: '0.7em' }}>{tokens[i].slice(0, 10)}</td>
+              {row.map((val, j) => (
+                <td key={j}
+                  title={`Src: ${tokens[j]}\nTgt: ${tokens[i]}\nAttn: ${val.toFixed(4)}`}
+                  style={{
+                    width: `${size}px`,
+                    height: `${size}px`,
+                    backgroundColor: `rgba(0, 255, 128, ${val})`, // Green heatmap
+                    border: '1px solid #333',
+                  }}>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
 const API_URL = 'http://localhost:8000';
 
 function App() {
@@ -10,12 +51,19 @@ function App() {
   const [interventions, setInterventions] = useState<Interventions>({});
   const [results, setResults] = useState<InferenceResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState<string>("");
   const [modelLoaded, setModelLoaded] = useState(false);
 
   const [selectedModel, setSelectedModel] = useState("meta-llama/Llama-3.2-1B");
   const [lensType, setLensType] = useState("block_output");
   const [attnAllLayers, setAttnAllLayers] = useState(false);
   const [useChatTemplate, setUseChatTemplate] = useState(false);
+
+  // Attention State
+  const [showAttention, setShowAttention] = useState(false);
+  const [attnAggregation, setAttnAggregation] = useState("all_average"); // Default to "Average All"
+  const [attnLayer, setAttnLayer] = useState(0);
+  const [attnHead, setAttnHead] = useState(0);
 
 
   const loadingRef = useRef(false);
@@ -41,17 +89,19 @@ function App() {
     }
   };
 
-  const loadModel = async (modelName: string) => {
-    if (loadingRef.current) return;
+  const loadModel = async (modelName: string): Promise<boolean> => {
+    if (loadingRef.current) return false;
     loadingRef.current = true;
 
     try {
       setLoading(true);
       await axios.post(`${API_URL}/load_model`, { model_name: modelName });
       setModelLoaded(true);
+      return true;
     } catch (err) {
       console.error("Failed to load model", err);
       alert("Failed to load model. Check backend console.");
+      return false;
     } finally {
       setLoading(false);
       loadingRef.current = false;
@@ -73,14 +123,20 @@ function App() {
     loadModel(newModel);
   };
 
-  const runInference = async () => {
+  const runInference = async (overrides?: {
+    text?: string;
+    interventions?: Interventions;
+    lensType?: string;
+    useChatTemplate?: boolean;
+  }) => {
     try {
       setLoading(true);
       const res = await axios.post(`${API_URL}/inference`, {
-        text,
-        interventions,
-        lens_type: lensType,
-        apply_chat_template: useChatTemplate
+        text: overrides?.text ?? text,
+        interventions: overrides?.interventions ?? interventions,
+        lens_type: overrides?.lensType ?? lensType,
+        apply_chat_template: overrides?.useChatTemplate ?? useChatTemplate,
+        return_attention: true // Always fetch attention
       });
       setResults(res.data);
     } catch (err: any) {
@@ -114,6 +170,7 @@ function App() {
 
   const [sessions, setSessions] = useState<{ id: string, name: string, timestamp: string }[]>([]);
   const [showLoadModal, setShowLoadModal] = useState(false);
+  const [loadVizOnly, setLoadVizOnly] = useState(false);
   const [streamType, setStreamType] = useState<"zero" | "scale">("zero");
 
   const saveSession = async () => {
@@ -145,6 +202,9 @@ function App() {
 
   const loadSession = async (sessionId: string) => {
     try {
+      setLoading(true);
+      setLoadingStatus("Loading session data...");
+
       const res = await axios.post(`${API_URL}/load_session`, { session_id: sessionId });
       const json = res.data;
 
@@ -152,17 +212,57 @@ function App() {
       setText(json.text);
       setInterventions(json.interventions);
       setLensType(json.lens_type);
-      setResults(json.results);
+      if (json.apply_chat_template !== undefined) {
+        setUseChatTemplate(json.apply_chat_template);
+      }
 
+      if (loadVizOnly) {
+        // Visualization Only Mode
+        if (json.results) {
+          setResults(json.results);
+          alert("Loaded visualization only. Model was not switched.");
+        } else {
+          alert("No results found in saved session.");
+        }
+        setShowLoadModal(false);
+        setLoading(false);
+        setLoadingStatus("");
+        return;
+      }
+
+      // Full Load Mode
       if (json.model_name && json.model_name !== selectedModel) {
+        setLoadingStatus(`Switching model to ${json.model_name}...`);
         setSelectedModel(json.model_name);
-        alert(`Session loaded. Model set to ${json.model_name}. Ensure this model is loaded if you want to run new inferences.`);
+
+        // Wait for model to load before running inference
+        const success = await loadModel(json.model_name);
+        if (!success) {
+          alert(`Failed to switch to model ${json.model_name}. Inference aborted.`);
+          setLoading(false);
+          setLoadingStatus("");
+          return;
+        }
       }
 
       setShowLoadModal(false);
+
+      // Auto-rerun inference with loaded data
+      setLoadingStatus("Re-running inference...");
+      await runInference({
+        text: json.text,
+        interventions: json.interventions,
+        lensType: json.lens_type,
+        useChatTemplate: json.apply_chat_template !== undefined ? json.apply_chat_template : useChatTemplate
+      });
+
+      setLoadingStatus("");
+
     } catch (err) {
       console.error("Failed to load session", err);
       alert("Failed to load session");
+      setLoading(false);
+      setLoadingStatus("");
     }
   };
 
@@ -203,8 +303,10 @@ function App() {
             <option value="combined">Combined (Most Detailed)</option>
           </select>
 
+
+
           <div className="status">
-            Status: {loading ? "Loading..." : modelLoaded ? "Ready" : "Not Loaded"}
+            Status: {loading ? (loadingStatus || "Loading...") : modelLoaded ? "Ready" : "Not Loaded"}
           </div>
 
           <div className="session-controls" style={{ display: 'flex', gap: '0.5rem' }}>
@@ -230,6 +332,20 @@ function App() {
             border: '1px solid #333'
           }}>
             <h3 style={{ marginTop: 0 }}>Load Session</h3>
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '15px', padding: '8px', backgroundColor: '#333', borderRadius: '4px' }}>
+              <input
+                type="checkbox"
+                checked={loadVizOnly}
+                onChange={e => setLoadVizOnly(e.target.checked)}
+              />
+              <span style={{ fontSize: '0.9em' }}>
+                <strong>Load Visualization Only</strong>
+                <br />
+                <span style={{ fontSize: '0.85em', color: '#aaa' }}>Skip model switch & inference (fast)</span>
+              </span>
+            </label>
+
             <div className="session-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '15px 0' }}>
               {sessions.length === 0 ? (
                 <p style={{ color: '#888' }}>No saved sessions found.</p>
@@ -423,7 +539,7 @@ function App() {
               </div>
             </div>
 
-            <button onClick={runInference} disabled={loading || !modelLoaded} className="primary-btn">
+            <button onClick={() => runInference()} disabled={loading || !modelLoaded} className="primary-btn">
               Run LogitLens
             </button>
           </div>
@@ -492,6 +608,224 @@ function App() {
             <div className="placeholder">Run inference to see results</div>
           )}
         </div>
+
+        {results && (
+          <div className="attention-viz card" style={{ gridColumn: '1 / -1' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <h2>Attention Visualization</h2>
+
+              <div className="attention-controls flex-row" style={{ gap: '1rem', alignItems: 'center' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.9em', fontWeight: 'bold' }}>
+                  <input
+                    type="checkbox"
+                    checked={showAttention}
+                    onChange={(e) => setShowAttention(e.target.checked)}
+                    disabled={loading}
+                  />
+                  Show Attention
+                </label>
+
+                {showAttention && (
+                  <>
+                    <select value={attnAggregation} onChange={e => setAttnAggregation(e.target.value)} disabled={loading}>
+                      <option value="all_average">Average All</option>
+                      <option value="layer_mean">Layer Mean</option>
+                      <option value="layer_mean_grid">Layer Mean (Grid)</option>
+                      <option value="specific">Specific Head</option>
+                      <option value="specific_grid">Specific Head (Grid)</option>
+                    </select>
+
+                    {(attnAggregation === "specific" || attnAggregation === "layer_mean" || attnAggregation === "specific_grid") && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                        <span style={{ fontSize: '0.8em' }}>Layer:</span>
+                        <input
+                          type="range"
+                          min="0"
+                          max={results && results.attention && results.attention.length > 0 ? results.attention.length - 1 : 31}
+                          value={attnLayer}
+                          onChange={e => setAttnLayer(parseInt(e.target.value))}
+                          disabled={loading}
+                        />
+                        <span style={{ fontSize: '0.8em', minWidth: '20px' }}>{attnLayer}</span>
+                      </div>
+                    )}
+
+                    {attnAggregation === "specific" && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                        <span style={{ fontSize: '0.8em' }}>Head:</span>
+                        <input
+                          type="range"
+                          min="0"
+                          max={results && results.attention && results.attention[0] && results.attention[0].length > 0 ? results.attention[0].length - 1 : 31}
+                          value={attnHead}
+                          onChange={e => setAttnHead(parseInt(e.target.value))}
+                          disabled={loading}
+                        />
+                        <span style={{ fontSize: '0.8em', minWidth: '20px' }}>{attnHead}</span>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+
+            {showAttention && (
+              <>
+                {!results.attention ? (
+                  <div style={{ padding: '20px', textAlign: 'center', color: '#888', backgroundColor: '#222', borderRadius: '4px' }}>
+                    <p>Attention data not available in current results.</p>
+                    <button onClick={() => runInference()} disabled={loading} className="primary-btn" style={{ marginTop: '10px' }}>
+                      Re-run Inference to Fetch Attention
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <p style={{ fontSize: '0.9em', color: '#888', marginBottom: '10px' }}>
+                      {attnAggregation === 'all_average' ? 'Average attention across all layers and heads' :
+                        attnAggregation === 'layer_mean' ? `Layer ${attnLayer} (Mean of all heads)` :
+                          attnAggregation === 'layer_mean_grid' ? 'Mean of all heads for each layer' :
+                            attnAggregation === 'specific_grid' ? `Layer ${attnLayer} (All Heads)` :
+                              `Layer ${attnLayer}, Head ${attnHead}`}
+                    </p>
+
+                    {(() => {
+                      const tokens = results.logit_lens[0].predictions.map((p: any) => p[0].token);
+                      const attnData = results.attention; // [layers, heads, seq, seq]
+
+                      if (!attnData || !attnData.length) return <div>No attention data</div>;
+
+                      if (attnAggregation === 'all_average') {
+                        // Compute average across all layers and heads
+                        const numLayers = attnData.length;
+                        const numHeads = attnData[0].length;
+                        const seqLen = attnData[0][0].length;
+
+                        // Initialize zero matrix
+                        const avgMatrix = Array(seqLen).fill(0).map(() => Array(seqLen).fill(0));
+
+                        for (let l = 0; l < numLayers; l++) {
+                          for (let h = 0; h < numHeads; h++) {
+                            for (let i = 0; i < seqLen; i++) {
+                              for (let j = 0; j < seqLen; j++) {
+                                avgMatrix[i][j] += attnData[l][h][i][j];
+                              }
+                            }
+                          }
+                        }
+
+                        // Divide by total count
+                        const total = numLayers * numHeads;
+                        for (let i = 0; i < seqLen; i++) {
+                          for (let j = 0; j < seqLen; j++) {
+                            avgMatrix[i][j] /= total;
+                          }
+                        }
+
+                        return <AttentionHeatmap data={avgMatrix} tokens={tokens} />;
+                      }
+
+                      if (attnAggregation === 'layer_mean') {
+                        // Compute mean for specific layer
+                        const layerData = attnData[attnLayer]; // [heads, seq, seq]
+                        if (!layerData) return <div>Invalid layer</div>;
+
+                        const numHeads = layerData.length;
+                        const seqLen = layerData[0].length;
+                        const avgMatrix = Array(seqLen).fill(0).map(() => Array(seqLen).fill(0));
+
+                        for (let h = 0; h < numHeads; h++) {
+                          for (let i = 0; i < seqLen; i++) {
+                            for (let j = 0; j < seqLen; j++) {
+                              avgMatrix[i][j] += layerData[h][i][j];
+                            }
+                          }
+                        }
+
+                        for (let i = 0; i < seqLen; i++) {
+                          for (let j = 0; j < seqLen; j++) {
+                            avgMatrix[i][j] /= numHeads;
+                          }
+                        }
+
+                        return <AttentionHeatmap data={avgMatrix} tokens={tokens} />;
+                      }
+
+                      if (attnAggregation === 'specific') {
+                        const layerData = attnData[attnLayer];
+                        if (!layerData) return <div>Invalid layer</div>;
+                        const headData = layerData[attnHead];
+                        if (!headData) return <div>Invalid head</div>;
+
+                        return <AttentionHeatmap data={headData} tokens={tokens} />;
+                      }
+
+                      if (attnAggregation === 'specific_grid') {
+                        const layerData = attnData[attnLayer]; // [heads, seq, seq]
+                        if (!layerData) return <div>Invalid layer</div>;
+
+                        return (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                            {layerData.map((headData: number[][], h: number) => (
+                              <AttentionHeatmap
+                                key={h}
+                                data={headData}
+                                tokens={tokens}
+                                title={`Head ${h}`}
+                                size={15} // Smaller size for grid
+                              />
+                            ))}
+                          </div>
+                        );
+                      }
+
+                      if (attnAggregation === 'layer_mean_grid') {
+                        // Compute mean for ALL layers
+                        const numLayers = attnData.length;
+                        const numHeads = attnData[0].length;
+                        const seqLen = attnData[0][0].length;
+
+                        // Pre-compute means for all layers
+                        const layerMeans = [];
+                        for (let l = 0; l < numLayers; l++) {
+                          const avgMatrix = Array(seqLen).fill(0).map(() => Array(seqLen).fill(0));
+                          for (let h = 0; h < numHeads; h++) {
+                            for (let i = 0; i < seqLen; i++) {
+                              for (let j = 0; j < seqLen; j++) {
+                                avgMatrix[i][j] += attnData[l][h][i][j];
+                              }
+                            }
+                          }
+                          for (let i = 0; i < seqLen; i++) {
+                            for (let j = 0; j < seqLen; j++) {
+                              avgMatrix[i][j] /= numHeads;
+                            }
+                          }
+                          layerMeans.push(avgMatrix);
+                        }
+
+                        return (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                            {layerMeans.map((layerData: number[][], l: number) => (
+                              <AttentionHeatmap
+                                key={l}
+                                data={layerData}
+                                tokens={tokens}
+                                title={`Layer ${l}`}
+                                size={15} // Smaller size for grid
+                              />
+                            ))}
+                          </div>
+                        );
+                      }
+
+                      return null;
+                    })()}
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        )}
       </main>
 
       {/* Global Fixed Tooltip */}

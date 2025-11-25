@@ -13,6 +13,7 @@ export interface LayerData {
 export interface InferenceResponse {
   text: string;
   logit_lens: LayerData[];
+  attention?: number[][][][]; // [layers, heads, seq, seq]
 }
 
 export interface InterventionConfig {

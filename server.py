@@ -41,6 +41,11 @@ class InferenceRequest(BaseModel):
     interventions: Dict[str, InterventionConfig] = {} # key: hook_name (e.g. "layer_0_output")
     lens_type: str = "block_output" # "block_output" or "post_attention"
     apply_chat_template: bool = False
+    return_attention: bool = False
+    # Deprecated aggregation params
+    # attention_aggregation: str = "layer_mean" 
+    # attention_layer: Optional[int] = None
+    # attention_head: Optional[int] = None
 
 class SaveStateRequest(BaseModel):
     filename: str
@@ -207,7 +212,12 @@ def inference(req: InferenceRequest):
                 intervention_hooks[name] = create_intervention_hook(config)
 
     with torch.no_grad():
-        outputs = model(input_ids, interventions=intervention_hooks, attention_masks=attention_masks)
+        outputs = model(
+            input_ids, 
+            interventions=intervention_hooks, 
+            attention_masks=attention_masks,
+            output_attentions=True # Always return attention
+        )
     
     # Process LogitLens
     try:
@@ -286,6 +296,7 @@ def inference(req: InferenceRequest):
             "interventions": {k: v.dict() for k, v in req.interventions.items()},
             "lens_type": req.lens_type,
             "model_name": model_config,
+            "apply_chat_template": req.apply_chat_template,
             "results": {
                 "text": req.text,
                 "logit_lens": lens_data
@@ -299,10 +310,27 @@ def inference(req: InferenceRequest):
         }
     }
 
-    return {
+    response = {
         "text": req.text,
         "logit_lens": lens_data
     }
+
+    if "attentions" in outputs:
+        # outputs["attentions"] is a tuple of tensors, one per layer
+        # Each tensor shape: [batch, num_heads, seq_len, seq_len]
+        attentions = outputs["attentions"]
+        
+        # Convert to nested list: [layers, heads, seq, seq] (for batch 0)
+        # We assume batch size 1 for now
+        attn_data = []
+        for layer_attn in attentions:
+            # layer_attn: [batch, num_heads, seq, seq]
+            # Take batch 0 -> [num_heads, seq, seq]
+            attn_data.append(layer_attn[0].cpu().numpy().tolist())
+        
+        response["attention"] = attn_data
+
+    return response
 
 SAVED_STATES_DIR = "saved_states"
 if not os.path.exists(SAVED_STATES_DIR):
