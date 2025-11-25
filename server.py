@@ -40,6 +40,7 @@ class InferenceRequest(BaseModel):
     text: str
     interventions: Dict[str, InterventionConfig] = {} # key: hook_name (e.g. "layer_0_output")
     lens_type: str = "block_output" # "block_output" or "post_attention"
+    apply_chat_template: bool = False
 
 class SaveStateRequest(BaseModel):
     filename: str
@@ -52,6 +53,8 @@ last_run_state = {}
 import threading
 
 model_lock = threading.Lock()
+
+import gc
 
 @app.post("/load_model")
 def load_model(req: LoadModelRequest):
@@ -67,10 +70,20 @@ def load_model(req: LoadModelRequest):
              return {"status": "already_loaded", "config": str(model.config)}
              
         try:
+            # Explicit cleanup
+            if model is not None:
+                print("Unloading previous model...")
+                del model
+                del tokenizer
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                elif torch.backends.mps.is_available():
+                     torch.mps.empty_cache()
+            
             print(f"Loading {req.model_name}...")
             tokenizer = AutoTokenizer.from_pretrained(req.model_name)
             model = LlamaModel.from_pretrained(req.model_name, device="cpu") # Use CPU for safety/compatibility first
-            # model.to("mps") # Uncomment if on Mac with MPS support
             model_config = req.model_name # Store the model name in model_config global variable
             return {"status": "loaded", "config": str(model.config)}
         except Exception as e:
@@ -112,7 +125,22 @@ def inference(req: InferenceRequest):
     if model is None:
         raise HTTPException(status_code=400, detail="Model not loaded")
 
-    input_ids = tokenizer.encode(req.text, return_tensors="pt").to(model.embed_tokens.weight.device)
+    if req.apply_chat_template:
+        messages = [{"role": "user", "content": req.text}]
+        # We use the tokenizer's chat template
+        # Note: This assumes the model has a chat template defined in its tokenizer_config.json
+        try:
+            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            # apply_chat_template adds the BOS token (e.g. <|begin_of_text|>) to the string.
+            # We must tell encode NOT to add another one.
+            input_ids = tokenizer.encode(prompt, return_tensors="pt", add_special_tokens=False).to(model.embed_tokens.weight.device)
+        except Exception as e:
+            # Fallback or error if template fails
+            print(f"Chat template application failed: {e}")
+            raise HTTPException(status_code=400, detail=f"Failed to apply chat template: {str(e)}")
+    else:
+        input_ids = tokenizer.encode(req.text, return_tensors="pt").to(model.embed_tokens.weight.device)
+
     seq_len = input_ids.shape[1]
     
     # Parse interventions

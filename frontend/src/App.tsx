@@ -12,9 +12,10 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [modelLoaded, setModelLoaded] = useState(false);
 
-  const [selectedModel, setSelectedModel] = useState("meta-llama/Llama-3.2-3B");
+  const [selectedModel, setSelectedModel] = useState("meta-llama/Llama-3.2-1B");
   const [lensType, setLensType] = useState("block_output");
   const [attnAllLayers, setAttnAllLayers] = useState(false);
+  const [useChatTemplate, setUseChatTemplate] = useState(false);
 
 
   const loadingRef = useRef(false);
@@ -61,6 +62,14 @@ function App() {
     const newModel = e.target.value;
     setSelectedModel(newModel);
     setModelLoaded(false);
+
+    // Auto-enable chat template for Instruct models
+    if (newModel.toLowerCase().includes("instruct")) {
+      setUseChatTemplate(true);
+    } else {
+      setUseChatTemplate(false);
+    }
+
     loadModel(newModel);
   };
 
@@ -70,7 +79,8 @@ function App() {
       const res = await axios.post(`${API_URL}/inference`, {
         text,
         interventions,
-        lens_type: lensType
+        lens_type: lensType,
+        apply_chat_template: useChatTemplate
       });
       setResults(res.data);
     } catch (err: any) {
@@ -172,8 +182,20 @@ function App() {
           <select value={selectedModel} onChange={handleModelChange} disabled={loading}>
             <option value="meta-llama/Llama-3.2-3B">Llama 3.2 3B</option>
             <option value="meta-llama/Llama-3.2-1B">Llama 3.2 1B</option>
+            <option value="meta-llama/Llama-3.2-1B-Instruct">Llama 3.2 1B Instruct</option>
+            <option value="meta-llama/Llama-3.2-3B-Instruct">Llama 3.2 3B Instruct</option>
             <option value="TinyLlama/TinyLlama-1.1B-Chat-v1.0">TinyLlama 1.1B</option>
           </select>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.9em' }}>
+            <input
+              type="checkbox"
+              checked={useChatTemplate}
+              onChange={(e) => setUseChatTemplate(e.target.checked)}
+              disabled={loading}
+            />
+            Use Chat Template
+          </label>
 
           <select value={lensType} onChange={e => setLensType(e.target.value)} disabled={loading}>
             <option value="block_output">Block Output (Standard)</option>

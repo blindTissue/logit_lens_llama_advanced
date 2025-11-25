@@ -1,9 +1,13 @@
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import torch
 from model import LlamaModel
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 def test_model():
-    model_name = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    model_name = "meta-llama/Llama-3.2-1B"
     print(f"Loading {model_name}...")
     
     # Load my model
