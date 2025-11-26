@@ -21,7 +21,7 @@ Now supports Instruct models, and visualize Attention!
     - **Block Attention**: Prevent information flow between specific tokens on a layer or across layers.
         - FYI: Attention blocking mechanism happens before softmax, sending -inf to attention scores. Attention scores will add up to 1.
 - **Session Management**: Save and load your analysis sessions (config + full tensor state).
-    - Sessions will be saved to `saved_states/` directory. example saved states are included in the repository.
+    - Sessions will be saved to `saved_states/` directory. 
     - Interventions, LogitLens results are saved in the `config.json` file
     - Activations are saved in the `tensors.npz` file. These can be used for futher experiments (L2 norm, cosine similarity, etc.)
         - Update on Nov 25, 2025: Now includes attention scores in the `tensors.npz` file.
