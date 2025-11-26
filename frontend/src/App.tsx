@@ -581,7 +581,7 @@ function App() {
         </div>
 
         <div className="visualization card">
-          <h2>Visualization</h2>
+          <h2>LogitLens Visualization</h2>
           {results ? (
             <div className="logit-lens-view" style={{ overflowX: 'auto' }}>
               <table style={{ borderCollapse: 'collapse', width: '100%' }}>
@@ -714,11 +714,11 @@ function App() {
                 ) : (
                   <>
                     <p style={{ fontSize: '0.9em', color: '#888', marginBottom: '10px' }}>
-                      {attnAggregation === 'all_average' ? 'Average attention across all layers and heads' :
-                        attnAggregation === 'layer_mean' ? `Layer ${attnLayer} (Mean of all heads)` :
+                      {attnAggregation === 'all_average' ? '' :
+                        attnAggregation === 'layer_mean' ? `` :
                           attnAggregation === 'layer_mean_grid' ? 'Mean of all heads for each layer' :
                             attnAggregation === 'specific_grid' ? `Layer ${attnLayer} (All Heads)` :
-                              `Layer ${attnLayer}, Head ${attnHead}`}
+                              ``}
                     </p>
 
                     {(() => {
