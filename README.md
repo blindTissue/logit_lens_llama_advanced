@@ -1,15 +1,20 @@
 # Logit Lens Llama Advanced
 
-An interactive tool to analyze and intervene on Llama model internal states.
+An interactive tool to analyze and intervene on Llama model internal states. Now updated to support Instruct Llama models, and visualize Attention!
 
 ## Demo
 
-![demo](banner.gif)
+![demo](images/banner.gif)
 
+Now supports Instruct models, and visualize Attention!
+
+| Attention Visualization | Instruct Model |
+|------------------------|----------------|
+| ![attention_visualization](images/attention_visualization.png) | ![instruct_model](images/instruct_model.png) |
 ## Features
 
 - **Interactive Logit Lens**: Visualize the model's prediction at every layer (Embeddings -> Layers -> Output).
-    - Optionn to include or exclude Post Attention LogitLens.
+    - Option to include or exclude Post Attention LogitLens.
 - **Interventions**: Modify internal streams (Residual, Attention, MLP)
     - **Zero**: Zero out specific vector streams.
     - **Scale**: Scale vectors by a factor.
@@ -19,6 +24,15 @@ An interactive tool to analyze and intervene on Llama model internal states.
     - Sessions will be saved to `saved_states/` directory. example saved states are included in the repository.
     - Interventions, LogitLens results are saved in the `config.json` file
     - Activations are saved in the `tensors.npz` file. These can be used for futher experiments (L2 norm, cosine similarity, etc.)
+        - Update on Nov 25, 2025: Now includes attention scores in the `tensors.npz` file.
+    - Size of `tensors.npz` file is large. Keep it in mind. (73MB for 3.2 3B 51 tokens)
+- **Attention Visualization**: Visualize attention scores. You have option to visualize
+    - Average attention scores across all layers and heads
+    - Average attention scores across particular layer
+    - Attention scores for a particular head
+    - Furthermore, you can save the attention visualization as a png file by clicking Save button.
+        - Some examples can be found in the `attention_visualizations/` directory.
+    
 
 ## Installation
 
@@ -48,21 +62,6 @@ In order to access Llama models from meta-llama you would need to set up a [hugg
     ```
 
 3.  Open `http://localhost:5173` in your browser.
-
-## Architecture
-
-- `model.py`: Custom `LlamaModel` with hooks for interventions.
-- `logit_lens.py`: Utilities for projecting hidden states to vocabulary.
-- `server.py`: FastAPI backend handling inference and state management.
-- `frontend/`: React + Vite application.
-
-## Interventions
-
-The application supports modifying the following streams:
-- `embeddings`: The initial token embeddings.
-- `layer_X_attn_output`: The output of the Attention mechanism at layer X.
-- `layer_X_mlp_output`: The output of the MLP at layer X.
-- `layer_X_output`: The final output of layer X (after residual connection).
 
 ## License
 

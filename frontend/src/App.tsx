@@ -50,7 +50,13 @@ const AttentionHeatmap = ({ data, tokens, title, size = 30, saveName }: { data: 
                     height: `${size}px`,
                     backgroundColor: `rgba(0, 255, 128, ${val})`, // Green heatmap
                     border: '1px solid #333',
+                    fontSize: '0.6em',
+                    color: val > 0.5 ? '#000' : '#fff',
+                    textAlign: 'center',
+                    verticalAlign: 'middle',
+                    padding: '2px',
                   }}>
+                  {size >= 25 && val.toFixed(2)}
                 </td>
               ))}
             </tr>
@@ -74,6 +80,7 @@ function App() {
   const [selectedModel, setSelectedModel] = useState("meta-llama/Llama-3.2-1B");
   const [lensType, setLensType] = useState("block_output");
   const [attnAllLayers, setAttnAllLayers] = useState(false);
+  const [streamAllLayers, setStreamAllLayers] = useState(false);
   const [useChatTemplate, setUseChatTemplate] = useState(false);
 
   // Attention State
@@ -440,7 +447,7 @@ function App() {
                 Modify activation streams (zero out, scale, etc.)
               </p>
               <div className="add-intervention flex-row" style={{ marginTop: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-                <select id="stream-layer-select">
+                <select id="stream-layer-select" disabled={streamAllLayers}>
                   {results && results.logit_lens ? (
                     Array.from({ length: Math.floor((results.logit_lens.length - 1) / (lensType === "combined" ? 2 : 1)) }, (_, i) => (
                       <option key={i} value={i}>Layer {i}</option>
@@ -469,7 +476,12 @@ function App() {
                 )}
                 <input type="number" id="stream-token-input" placeholder="Token Idx (opt)" style={{ width: '100px' }} />
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                  <input type="checkbox" id="stream-all-layers" />
+                  <input
+                    type="checkbox"
+                    id="stream-all-layers"
+                    checked={streamAllLayers}
+                    onChange={(e) => setStreamAllLayers(e.target.checked)}
+                  />
                   Apply to all layers
                 </label>
 

@@ -13,3 +13,4 @@ wheels/
 saved_states/
 .DS_Store
 stuff.ipynb
+.env
