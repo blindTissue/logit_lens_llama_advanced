@@ -38,7 +38,7 @@ class InterventionConfig(BaseModel):
 
 class InferenceRequest(BaseModel):
     text: str
-    interventions: Dict[str, InterventionConfig] = {} # key: hook_name (e.g. "layer_0_output")
+    interventions: Dict[str, List[InterventionConfig]] = {} # key: hook_name (e.g. "layer_0_output")
     lens_type: str = "block_output" # "block_output" or "post_attention"
     apply_chat_template: bool = False
     return_attention: bool = False
@@ -99,28 +99,29 @@ def get_model_status():
     global model, model_config
     return {"loaded": model is not None, "model_name": model_config if model else None}
 
-def create_intervention_hook(config: InterventionConfig):
+def create_intervention_hook(configs: List[InterventionConfig]):
     def hook(tensor):
         # tensor shape: [batch, seq_len, hidden_size]
         
-        if config.token_index is not None:
-            # Apply only to specific token
-            idx = config.token_index
-            if idx < 0: idx += tensor.shape[1] # Handle negative indices
-            
-            if 0 <= idx < tensor.shape[1]:
+        for config in configs:
+            if config.token_index is not None:
+                # Apply only to specific token
+                idx = config.token_index
+                if idx < 0: idx += tensor.shape[1] # Handle negative indices
+                
+                if 0 <= idx < tensor.shape[1]:
+                    if config.type == "zero":
+                        tensor[:, idx, :] = 0
+                    elif config.type == "scale":
+                        tensor[:, idx, :] *= config.value
+            else:
+                # Apply to all tokens if no index specified
                 if config.type == "zero":
-                    tensor[:, idx, :] = 0
+                    tensor = torch.zeros_like(tensor)
                 elif config.type == "scale":
-                    tensor[:, idx, :] *= config.value
-            return tensor
-        
-        # Apply to all tokens if no index specified
-        if config.type == "zero":
-            return torch.zeros_like(tensor)
-        elif config.type == "scale":
-            return tensor * config.value
-        # Add more complex ones later
+                    tensor = tensor * config.value
+            # Add more complex ones later
+            
         return tensor
     return hook
 
@@ -152,64 +153,105 @@ def inference(req: InferenceRequest):
     intervention_hooks = {}
     attention_masks = {}  # Dict[layer_idx, mask_tensor]
     
-    for name, config in req.interventions.items():
-        if config.type == "block_attention":
-            # Extract layer index from intervention name
-            # Handles: "layer_5_attention", "all_layers_attention", or "all_layers_attention_0_to_1"
-            is_attention_intervention = (
-                (name.startswith("layer_") and "_attention" in name) or 
-                name.startswith("all_layers_attention")
-            )
+    for name, configs in req.interventions.items():
+        # Ensure configs is a list
+        if not isinstance(configs, list):
+            configs = [configs]
             
-            if is_attention_intervention:
-                # Determine which layers to apply to
-                if config.all_layers or name.startswith("all_layers_attention"):
-                    # Apply to all layers
-                    layer_indices = range(model.config.num_hidden_layers)
-                else:
-                    # Apply to single layer
-                    layer_idx_str = name.split("_")[1]
-                    layer_indices = [int(layer_idx_str)]
+        # Separate attention configs from stream configs
+        stream_configs = []
+        
+        for config in configs:
+            if config.type == "block_attention":
+                # Extract layer index from intervention name
+                # Handles: "layer_5_attention", "all_layers_attention", or "all_layers_attention_0_to_1"
+                is_attention_intervention = (
+                    (name.startswith("layer_") and "_attention" in name) or 
+                    name.startswith("all_layers_attention")
+                )
                 
-                for layer_idx in layer_indices:
-                    # Create attention mask for this layer
-                    # Mask shape: [seq_len, seq_len] with -inf where attention should be blocked
-                    if layer_idx not in attention_masks:
-                        attention_masks[layer_idx] = torch.zeros((seq_len, seq_len), device=input_ids.device)
+                if is_attention_intervention:
+                    # Determine which layers to apply to
+                    if config.all_layers or name.startswith("all_layers_attention"):
+                        # Apply to all layers
+                        layer_indices = range(model.config.num_hidden_layers)
+                    else:
+                        # Apply to single layer
+                        try:
+                            layer_idx_str = name.split("_")[1]
+                            layer_indices = [int(layer_idx_str)]
+                        except:
+                            continue # Skip if format is weird
                     
-                    mask = attention_masks[layer_idx]
-                    
-                    if config.source_tokens and config.target_tokens:
-                        for src in config.source_tokens:
-                            for tgt in config.target_tokens:
-                                # Block attention from src to tgt
-                                if 0 <= src < seq_len and 0 <= tgt < seq_len:
-                                    mask[tgt, src] = float("-inf")
-        else:
-            # Regular intervention (scale, zero, etc.)
-            if config.all_layers and name != "embeddings":
-                # Apply to all layers - extract the location from the name
+                    for layer_idx in layer_indices:
+                        # Create attention mask for this layer
+                        # Mask shape: [seq_len, seq_len] with -inf where attention should be blocked
+                        if layer_idx not in attention_masks:
+                            attention_masks[layer_idx] = torch.zeros((seq_len, seq_len), device=input_ids.device)
+                        
+                        mask = attention_masks[layer_idx]
+                        
+                        if config.source_tokens and config.target_tokens:
+                            for src in config.source_tokens:
+                                for tgt in config.target_tokens:
+                                    # Block attention from src to tgt
+                                    if 0 <= src < seq_len and 0 <= tgt < seq_len:
+                                        mask[tgt, src] = float("-inf")
+            else:
+                # Regular intervention (scale, zero, etc.)
+                stream_configs.append(config)
+
+        if stream_configs:
+            # For stream interventions, we need to handle "all_layers" logic here or in the hook creation?
+            # Actually, the "name" key dictates where it hooks.
+            # If name is "all_layers_output", we need to distribute it.
+            
+            if name.startswith("all_layers") and name != "embeddings" and "attention" not in name:
+                 # Apply to all layers - extract the location from the name
                 parts = name.split("_")
-                
-                # Handle both "all_layers_output" and "layer_5_output" formats
-                if parts[0] == "all" and len(parts) >= 3:
-                    # Format: all_layers_output -> extract "output"
+                if len(parts) >= 3:
+                     # Format: all_layers_output -> extract "output"
                     location = "_".join(parts[2:])
-                elif parts[0] == "layer" and len(parts) >= 3:
-                    # Format: layer_5_output -> extract "output"
-                    location = "_".join(parts[2:])
-                else:
-                    # Fallback: use the intervention name as-is for single layer
-                    intervention_hooks[name] = create_intervention_hook(config)
-                    continue
-                
-                # Apply to all layers
+                    
+                    for layer_idx in range(model.config.num_hidden_layers):
+                        hook_name = f"layer_{layer_idx}_{location}"
+                        # If there's already a hook there, we should ideally append to it.
+                        # But our current structure iterates by req.interventions keys.
+                        # So we might overwrite or need a temporary dict to aggregate.
+                        
+                        # Better approach: Pre-process all interventions into a map: hook_point -> List[Config]
+                        pass # Handled below in the aggregated loop
+            else:
+                # Single layer or embeddings
+                intervention_hooks[name] = create_intervention_hook(stream_configs)
+
+    # Re-process to handle "all_layers" expansion correctly and merge with single layer interventions
+    # This is a bit tricky because we might have "all_layers_output" AND "layer_5_output".
+    # We want both to apply to layer 5.
+    
+    final_hooks_map = {} # hook_point -> List[Config]
+    
+    for name, configs in req.interventions.items():
+        if not isinstance(configs, list): configs = [configs]
+        
+        stream_configs = [c for c in configs if c.type != "block_attention"]
+        if not stream_configs: continue
+        
+        if name.startswith("all_layers") and name != "embeddings":
+             parts = name.split("_")
+             if len(parts) >= 3:
+                location = "_".join(parts[2:])
                 for layer_idx in range(model.config.num_hidden_layers):
                     hook_name = f"layer_{layer_idx}_{location}"
-                    intervention_hooks[hook_name] = create_intervention_hook(config)
-            else:
-                # Single layer intervention
-                intervention_hooks[name] = create_intervention_hook(config)
+                    if hook_name not in final_hooks_map: final_hooks_map[hook_name] = []
+                    final_hooks_map[hook_name].extend(stream_configs)
+        else:
+            if name not in final_hooks_map: final_hooks_map[name] = []
+            final_hooks_map[name].extend(stream_configs)
+            
+    # Create final hooks
+    for hook_name, configs in final_hooks_map.items():
+        intervention_hooks[hook_name] = create_intervention_hook(configs)
 
     with torch.no_grad():
         outputs = model(
@@ -305,7 +347,7 @@ def inference(req: InferenceRequest):
     last_run_state = {
         "config": {
             "text": req.text,
-            "interventions": {k: v.dict() for k, v in req.interventions.items()},
+            "interventions": {k: [v.dict() for v in val] if isinstance(val, list) else val.dict() for k, val in req.interventions.items()},
             "lens_type": req.lens_type,
             "model_name": model_config,
             "apply_chat_template": req.apply_chat_template,
@@ -398,6 +440,24 @@ def list_sessions():
                 "timestamp": timestamp_str
             })
     return sessions
+
+class DeleteSessionRequest(BaseModel):
+    session_id: str
+
+@app.post("/delete_session")
+def delete_session(req: DeleteSessionRequest):
+    import shutil
+    session_dir = os.path.join(SAVED_STATES_DIR, req.session_id)
+    
+    if not os.path.exists(session_dir):
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    try:
+        shutil.rmtree(session_dir)
+        return {"status": "deleted", "session_id": req.session_id}
+    except Exception as e:
+        print(f"Error deleting session: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete session: {str(e)}")
 
 @app.post("/load_session")
 def load_session(req: LoadSessionRequest):

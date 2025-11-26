@@ -178,16 +178,49 @@ function App() {
   };
 
   const addIntervention = (layer: string, type: "scale" | "zero" | "block_attention", value: number = 0, tokenIndex?: number, sourceTokens?: number[], targetTokens?: number[], allLayers?: boolean) => {
-    setInterventions(prev => ({
-      ...prev,
-      [layer]: { type, value, token_index: tokenIndex, source_tokens: sourceTokens, target_tokens: targetTokens, all_layers: allLayers }
-    }));
+    setInterventions(prev => {
+      const currentList = prev[layer] || [];
+
+      // Remove existing intervention on the same token (or same "all tokens" setting)
+      // For block_attention, we might want to allow multiple unless exact same source/target?
+      // But user request specifically mentioned "same token". 
+      // Let's apply strict replacement for stream interventions (scale/zero) based on token_index.
+
+      let newList = currentList;
+
+      if (type !== 'block_attention') {
+        newList = currentList.filter(item => {
+          // If both target specific token, match index
+          if (item.token_index !== undefined && tokenIndex !== undefined) {
+            return item.token_index !== tokenIndex;
+          }
+          // If both target all tokens (undefined index), match that
+          if (item.token_index === undefined && tokenIndex === undefined) {
+            return false; // Remove existing "all tokens" intervention
+          }
+          return true;
+        });
+      }
+
+      const newConfig = { type, value, token_index: tokenIndex, source_tokens: sourceTokens, target_tokens: targetTokens, all_layers: allLayers };
+      return {
+        ...prev,
+        [layer]: [...newList, newConfig]
+      };
+    });
   };
 
-  const removeIntervention = (layer: string) => {
+  const removeIntervention = (layer: string, index: number) => {
     setInterventions(prev => {
+      const currentList = prev[layer] || [];
+      const newList = currentList.filter((_, i) => i !== index);
+
       const next = { ...prev };
-      delete next[layer];
+      if (newList.length === 0) {
+        delete next[layer];
+      } else {
+        next[layer] = newList;
+      }
       return next;
     });
   };
@@ -234,7 +267,18 @@ function App() {
 
       // Restore state
       setText(json.text);
-      setInterventions(json.interventions);
+
+      // Handle legacy format (single config per layer)
+      const restoredInterventions: Interventions = {};
+      for (const [key, val] of Object.entries(json.interventions)) {
+        if (Array.isArray(val)) {
+          restoredInterventions[key] = val as any[];
+        } else {
+          restoredInterventions[key] = [val as any];
+        }
+      }
+      setInterventions(restoredInterventions);
+
       setLensType(json.lens_type);
       setUseChatTemplate(json.apply_chat_template);
 
@@ -273,7 +317,7 @@ function App() {
       setLoadingStatus("Re-running inference...");
       await runInference({
         text: json.text,
-        interventions: json.interventions,
+        interventions: restoredInterventions,
         lensType: json.lens_type,
         useChatTemplate: json.apply_chat_template
       });
@@ -296,6 +340,22 @@ function App() {
     preds: any[];
     layerName: string;
   } | null>(null);
+
+  const deleteSession = async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent loading the session
+    if (!confirm("Are you sure you want to delete this session? This action cannot be undone.")) {
+      return;
+    }
+
+    try {
+      await axios.post(`${API_URL}/delete_session`, { session_id: sessionId });
+      // Refresh list
+      fetchSessions();
+    } catch (err) {
+      console.error("Failed to delete session", err);
+      alert("Failed to delete session");
+    }
+  };
 
   return (
     <div className="app-container">
@@ -392,16 +452,26 @@ function App() {
                 <p style={{ color: '#888' }}>No saved sessions found.</p>
               ) : (
                 sessions.map(s => (
-                  <button
-                    key={s.id}
-                    onClick={() => loadSession(s.id)}
-                    className="secondary-btn"
-                    disabled={loading}
-                    style={{ textAlign: 'left', padding: '10px', display: 'flex', justifyContent: 'space-between', opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}
-                  >
-                    <span>{s.name}</span>
-                    <span style={{ fontSize: '0.8em', color: '#888' }}>{s.timestamp}</span>
-                  </button>
+                  <div key={s.id} style={{ display: 'flex', gap: '5px' }}>
+                    <button
+                      onClick={() => loadSession(s.id)}
+                      className="secondary-btn"
+                      disabled={loading}
+                      style={{ flex: 1, textAlign: 'left', padding: '10px', display: 'flex', justifyContent: 'space-between', opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}
+                    >
+                      <span>{s.name}</span>
+                      <span style={{ fontSize: '0.8em', color: '#888' }}>{s.timestamp}</span>
+                    </button>
+                    <button
+                      onClick={(e) => deleteSession(s.id, e)}
+                      className="secondary-btn"
+                      disabled={loading}
+                      title="Delete Session"
+                      style={{ padding: '0 12px', color: '#ff4444', borderColor: '#552222', opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}
+                    >
+                      🗑️
+                    </button>
+                  </div>
                 ))
               )}
             </div>
@@ -428,16 +498,21 @@ function App() {
 
             <div className="interventions">
               <h3>Active Interventions</h3>
-              {Object.entries(interventions).map(([layer, config]) => (
-                <div key={layer} className="intervention-item flex-row" style={{ alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span>
-                    {layer}: {config.type}
-                    {config.type === 'scale' && `(${config.value})`}
-                    {config.type === 'block_attention' && config.source_tokens && config.target_tokens && ` (${config.source_tokens.join(',')} → ${config.target_tokens.join(',')})`}
-                    {config.token_index != null && ` @ Token ${config.token_index}`}
-                    {config.all_layers && ` [ALL LAYERS]`}
-                  </span>
-                  <button onClick={() => removeIntervention(layer)} style={{ padding: '4px 8px', fontSize: '0.8em' }}>X</button>
+              {Object.entries(interventions).map(([layer, configs]) => (
+                <div key={layer} style={{ marginBottom: '10px', border: '1px solid #333', padding: '5px', borderRadius: '4px' }}>
+                  <div style={{ fontWeight: 'bold', marginBottom: '5px', fontSize: '0.9em', color: '#aaa' }}>{layer}</div>
+                  {configs.map((config, idx) => (
+                    <div key={idx} className="intervention-item flex-row" style={{ alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px', backgroundColor: '#222', padding: '4px', borderRadius: '2px' }}>
+                      <span style={{ fontSize: '0.9em' }}>
+                        {config.type}
+                        {config.type === 'scale' && `(${config.value})`}
+                        {config.type === 'block_attention' && config.source_tokens && config.target_tokens && ` (${config.source_tokens.join(',')} → ${config.target_tokens.join(',')})`}
+                        {config.token_index != null && ` @ Token ${config.token_index}`}
+                        {config.all_layers && ` [ALL LAYERS]`}
+                      </span>
+                      <button onClick={() => removeIntervention(layer, idx)} style={{ padding: '2px 6px', fontSize: '0.8em', marginLeft: '10px' }}>X</button>
+                    </div>
+                  ))}
                 </div>
               ))}
 

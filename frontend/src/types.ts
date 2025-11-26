@@ -26,6 +26,4 @@ export interface InterventionConfig {
   all_layers?: boolean;
 }
 
-export interface Interventions {
-  [hook_name: string]: InterventionConfig;
-}
+export type Interventions = Record<string, InterventionConfig[]>;

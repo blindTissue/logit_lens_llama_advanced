@@ -307,7 +307,7 @@ class LlamaModel(nn.Module):
             "logits": logits,
             "past_key_values": next_decoder_cache,
             "hidden_states": all_hidden_states,
-            "hidden_states": all_hidden_states,
+
             "post_attention_states": all_post_attention_states,
             "attentions": all_attentions
         }
