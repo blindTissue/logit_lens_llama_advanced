@@ -4,12 +4,29 @@ import './App.css'
 import type { InferenceResponse, Interventions } from './types'
 
 // Simple Heatmap Component
-const AttentionHeatmap = ({ data, tokens, title, size = 30 }: { data: number[][], tokens: string[], title?: string, size?: number }) => {
+const AttentionHeatmap = ({ data, tokens, title, size = 30, saveName }: { data: number[][], tokens: string[], title?: string, size?: number, saveName?: string }) => {
   if (!data || !data.length) return null;
+
+  const handleSave = async () => {
+    try {
+      const res = await axios.post(`${API_URL}/save_visualization`, {
+        attention_data: data,
+        tokens: tokens,
+        title: saveName || title || "Attention Heatmap"
+      });
+      alert(`Visualization saved to: ${res.data.filepath}`);
+    } catch (err) {
+      console.error("Failed to save visualization", err);
+      alert("Failed to save visualization");
+    }
+  };
 
   return (
     <div className="attention-heatmap" style={{ overflowX: 'auto', marginTop: '10px', display: 'inline-block', marginRight: '10px' }}>
-      {title && <h4 style={{ margin: '0 0 5px 0', fontSize: '0.9em' }}>{title}</h4>}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+        {title && <h4 style={{ margin: 0, fontSize: '0.9em' }}>{title}</h4>}
+        <button onClick={handleSave} className="save-btn">Save</button>
+      </div>
       <table style={{ borderCollapse: 'collapse', fontSize: '0.8em' }}>
         <thead>
           <tr>
@@ -113,8 +130,8 @@ function App() {
     setSelectedModel(newModel);
     setModelLoaded(false);
 
-    // Auto-enable chat template for Instruct models
-    if (newModel.toLowerCase().includes("instruct")) {
+    // Auto-enable chat template for Instruct/Chat models, disable for others
+    if (newModel.toLowerCase().includes("instruct") || newModel.toLowerCase().includes("chat")) {
       setUseChatTemplate(true);
     } else {
       setUseChatTemplate(false);
@@ -212,9 +229,7 @@ function App() {
       setText(json.text);
       setInterventions(json.interventions);
       setLensType(json.lens_type);
-      if (json.apply_chat_template !== undefined) {
-        setUseChatTemplate(json.apply_chat_template);
-      }
+      setUseChatTemplate(json.apply_chat_template);
 
       if (loadVizOnly) {
         // Visualization Only Mode
@@ -245,7 +260,7 @@ function App() {
         }
       }
 
-      setShowLoadModal(false);
+      // setShowLoadModal(false); // Don't close here, wait for inference
 
       // Auto-rerun inference with loaded data
       setLoadingStatus("Re-running inference...");
@@ -253,11 +268,12 @@ function App() {
         text: json.text,
         interventions: json.interventions,
         lensType: json.lens_type,
-        useChatTemplate: json.apply_chat_template !== undefined ? json.apply_chat_template : useChatTemplate
+        useChatTemplate: json.apply_chat_template
       });
 
       setLoadingStatus("");
-
+      setShowLoadModal(false); // Close modal only after everything is done
+      setLoading(false);
     } catch (err) {
       console.error("Failed to load session", err);
       alert("Failed to load session");
@@ -287,12 +303,22 @@ function App() {
             <option value="TinyLlama/TinyLlama-1.1B-Chat-v1.0">TinyLlama 1.1B</option>
           </select>
 
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.9em' }}>
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.3rem',
+              fontSize: '0.9em',
+              opacity: (selectedModel.includes("Instruct") || selectedModel.includes("Chat")) ? 1 : 0.5,
+              cursor: (selectedModel.includes("Instruct") || selectedModel.includes("Chat")) ? 'pointer' : 'not-allowed'
+            }}
+            title={!(selectedModel.includes("Instruct") || selectedModel.includes("Chat")) ? "This is a base model and should not be used with a chat template." : ""}
+          >
             <input
               type="checkbox"
               checked={useChatTemplate}
               onChange={(e) => setUseChatTemplate(e.target.checked)}
-              disabled={loading}
+              disabled={loading || !(selectedModel.includes("Instruct") || selectedModel.includes("Chat"))}
             />
             Use Chat Template
           </label>
@@ -333,6 +359,14 @@ function App() {
           }}>
             <h3 style={{ marginTop: 0 }}>Load Session</h3>
 
+            {loading && (
+              <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#2a2a2a', borderRadius: '4px', border: '1px solid #444', color: '#4caf50', textAlign: 'center' }}>
+                <div className="loading-spinner" style={{ display: 'inline-block', width: '12px', height: '12px', border: '2px solid #4caf50', borderTop: '2px solid transparent', borderRadius: '50%', animation: 'spin 1s linear infinite', marginRight: '8px' }}></div>
+                <strong>{loadingStatus}</strong>
+                <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
+              </div>
+            )}
+
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '15px', padding: '8px', backgroundColor: '#333', borderRadius: '4px' }}>
               <input
                 type="checkbox"
@@ -355,7 +389,8 @@ function App() {
                     key={s.id}
                     onClick={() => loadSession(s.id)}
                     className="secondary-btn"
-                    style={{ textAlign: 'left', padding: '10px', display: 'flex', justifyContent: 'space-between' }}
+                    disabled={loading}
+                    style={{ textAlign: 'left', padding: '10px', display: 'flex', justifyContent: 'space-between', opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer' }}
                   >
                     <span>{s.name}</span>
                     <span style={{ fontSize: '0.8em', color: '#888' }}>{s.timestamp}</span>
@@ -611,62 +646,60 @@ function App() {
 
         {results && (
           <div className="attention-viz card" style={{ gridColumn: '1 / -1' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-              <h2>Attention Visualization</h2>
+            <h2>Attention Visualization</h2>
 
-              <div className="attention-controls flex-row" style={{ gap: '1rem', alignItems: 'center' }}>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.9em', fontWeight: 'bold' }}>
-                  <input
-                    type="checkbox"
-                    checked={showAttention}
-                    onChange={(e) => setShowAttention(e.target.checked)}
-                    disabled={loading}
-                  />
-                  Show Attention
-                </label>
+            <div className="attention-controls flex-row" style={{ gap: '1rem', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.9em', fontWeight: 'bold' }}>
+                <input
+                  type="checkbox"
+                  checked={showAttention}
+                  onChange={(e) => setShowAttention(e.target.checked)}
+                  disabled={loading}
+                />
+                Show Attention
+              </label>
 
-                {showAttention && (
-                  <>
-                    <select value={attnAggregation} onChange={e => setAttnAggregation(e.target.value)} disabled={loading}>
-                      <option value="all_average">Average All</option>
-                      <option value="layer_mean">Layer Mean</option>
-                      <option value="layer_mean_grid">Layer Mean (Grid)</option>
-                      <option value="specific">Specific Head</option>
-                      <option value="specific_grid">Specific Head (Grid)</option>
-                    </select>
+              {showAttention && (
+                <>
+                  <select value={attnAggregation} onChange={e => setAttnAggregation(e.target.value)} disabled={loading}>
+                    <option value="all_average">Average All</option>
+                    <option value="layer_mean">Layer Mean</option>
+                    <option value="layer_mean_grid">Layer Mean (Grid)</option>
+                    <option value="specific">Specific Head</option>
+                    <option value="specific_grid">Specific Head (Grid)</option>
+                  </select>
 
-                    {(attnAggregation === "specific" || attnAggregation === "layer_mean" || attnAggregation === "specific_grid") && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        <span style={{ fontSize: '0.8em' }}>Layer:</span>
-                        <input
-                          type="range"
-                          min="0"
-                          max={results && results.attention && results.attention.length > 0 ? results.attention.length - 1 : 31}
-                          value={attnLayer}
-                          onChange={e => setAttnLayer(parseInt(e.target.value))}
-                          disabled={loading}
-                        />
-                        <span style={{ fontSize: '0.8em', minWidth: '20px' }}>{attnLayer}</span>
-                      </div>
-                    )}
+                  {(attnAggregation === "specific" || attnAggregation === "layer_mean" || attnAggregation === "specific_grid") && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <span style={{ fontSize: '0.8em' }}>Layer:</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max={results && results.attention && results.attention.length > 0 ? results.attention.length - 1 : 31}
+                        value={attnLayer}
+                        onChange={e => setAttnLayer(parseInt(e.target.value))}
+                        disabled={loading}
+                      />
+                      <span style={{ fontSize: '0.8em', minWidth: '20px' }}>{attnLayer}</span>
+                    </div>
+                  )}
 
-                    {attnAggregation === "specific" && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        <span style={{ fontSize: '0.8em' }}>Head:</span>
-                        <input
-                          type="range"
-                          min="0"
-                          max={results && results.attention && results.attention[0] && results.attention[0].length > 0 ? results.attention[0].length - 1 : 31}
-                          value={attnHead}
-                          onChange={e => setAttnHead(parseInt(e.target.value))}
-                          disabled={loading}
-                        />
-                        <span style={{ fontSize: '0.8em', minWidth: '20px' }}>{attnHead}</span>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
+                  {attnAggregation === "specific" && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <span style={{ fontSize: '0.8em' }}>Head:</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max={results && results.attention && results.attention[0] && results.attention[0].length > 0 ? results.attention[0].length - 1 : 31}
+                        value={attnHead}
+                        onChange={e => setAttnHead(parseInt(e.target.value))}
+                        disabled={loading}
+                      />
+                      <span style={{ fontSize: '0.8em', minWidth: '20px' }}>{attnHead}</span>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
 
             {showAttention && (
@@ -721,7 +754,8 @@ function App() {
                           }
                         }
 
-                        return <AttentionHeatmap data={avgMatrix} tokens={tokens} />;
+                        const saveName = `${selectedModel.split('/').pop()}_${text.slice(0, 10).replace(/\s+/g, '_')}_AvgAll`;
+                        return <AttentionHeatmap data={avgMatrix} tokens={tokens} title="Average Attention (All Layers & Heads)" saveName={saveName} />;
                       }
 
                       if (attnAggregation === 'layer_mean') {
@@ -731,49 +765,71 @@ function App() {
 
                         const numHeads = layerData.length;
                         const seqLen = layerData[0].length;
-                        const avgMatrix = Array(seqLen).fill(0).map(() => Array(seqLen).fill(0));
+                        const layerMeanMatrix = Array(seqLen).fill(0).map(() => Array(seqLen).fill(0));
 
                         for (let h = 0; h < numHeads; h++) {
                           for (let i = 0; i < seqLen; i++) {
                             for (let j = 0; j < seqLen; j++) {
-                              avgMatrix[i][j] += layerData[h][i][j];
+                              layerMeanMatrix[i][j] += layerData[h][i][j];
                             }
                           }
                         }
 
+                        // Divide by num heads
                         for (let i = 0; i < seqLen; i++) {
                           for (let j = 0; j < seqLen; j++) {
-                            avgMatrix[i][j] /= numHeads;
+                            layerMeanMatrix[i][j] /= numHeads;
                           }
                         }
 
-                        return <AttentionHeatmap data={avgMatrix} tokens={tokens} />;
+                        const saveName = `${selectedModel.split('/').pop()}_${text.slice(0, 10).replace(/\s+/g, '_')}_L${attnLayer}_Mean`;
+                        return <AttentionHeatmap data={layerMeanMatrix} tokens={tokens} title={`Layer ${attnLayer} Mean Attention`} saveName={saveName} />;
                       }
 
                       if (attnAggregation === 'specific') {
-                        const layerData = attnData[attnLayer];
-                        if (!layerData) return <div>Invalid layer</div>;
-                        const headData = layerData[attnHead];
-                        if (!headData) return <div>Invalid head</div>;
-
-                        return <AttentionHeatmap data={headData} tokens={tokens} />;
+                        const matrix = attnData[attnLayer][attnHead];
+                        if (!matrix) return <div>Invalid head</div>;
+                        const saveName = `${selectedModel.split('/').pop()}_${text.slice(0, 10).replace(/\s+/g, '_')}_L${attnLayer}_H${attnHead}`;
+                        return <AttentionHeatmap data={matrix} tokens={tokens} title={`Layer ${attnLayer}, Head ${attnHead}`} saveName={saveName} />;
                       }
 
                       if (attnAggregation === 'specific_grid') {
                         const layerData = attnData[attnLayer]; // [heads, seq, seq]
                         if (!layerData) return <div>Invalid layer</div>;
 
+                        const handleSaveGrid = async () => {
+                          try {
+                            const res = await axios.post(`${API_URL}/save_grid_visualization`, {
+                              grid_data: layerData,
+                              tokens: tokens,
+                              title: `${selectedModel.split('/').pop()}_${text.slice(0, 10).replace(/\s+/g, '_')}_L${attnLayer}_AllHeads`,
+                              grid_type: "head_grid"
+                            });
+                            alert(`Grid visualization saved to: ${res.data.filepath}`);
+                          } catch (err) {
+                            console.error("Failed to save grid visualization", err);
+                            alert("Failed to save grid visualization");
+                          }
+                        };
+
                         return (
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-                            {layerData.map((headData: number[][], h: number) => (
-                              <AttentionHeatmap
-                                key={h}
-                                data={headData}
-                                tokens={tokens}
-                                title={`Head ${h}`}
-                                size={15} // Smaller size for grid
-                              />
-                            ))}
+                          <div>
+                            <div style={{ marginBottom: '10px' }}>
+                              <button onClick={handleSaveGrid} className="save-btn">
+                                Save All Heads
+                              </button>
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                              {layerData.map((headData: number[][], h: number) => (
+                                <AttentionHeatmap
+                                  key={h}
+                                  data={headData}
+                                  tokens={tokens}
+                                  title={`Head ${h}`}
+                                  size={15} // Smaller size for grid
+                                />
+                              ))}
+                            </div>
                           </div>
                         );
                       }
@@ -785,7 +841,7 @@ function App() {
                         const seqLen = attnData[0][0].length;
 
                         // Pre-compute means for all layers
-                        const layerMeans = [];
+                        const layerMeans: number[][][] = [];
                         for (let l = 0; l < numLayers; l++) {
                           const avgMatrix = Array(seqLen).fill(0).map(() => Array(seqLen).fill(0));
                           for (let h = 0; h < numHeads; h++) {
@@ -803,17 +859,39 @@ function App() {
                           layerMeans.push(avgMatrix);
                         }
 
+                        const handleSaveGrid = async () => {
+                          try {
+                            const res = await axios.post(`${API_URL}/save_grid_visualization`, {
+                              grid_data: layerMeans,
+                              tokens: tokens,
+                              title: `${selectedModel.split('/').pop()}_${text.slice(0, 10).replace(/\s+/g, '_')}_AllLayers_Mean`,
+                              grid_type: "layer_grid"
+                            });
+                            alert(`Grid visualization saved to: ${res.data.filepath}`);
+                          } catch (err) {
+                            console.error("Failed to save grid visualization", err);
+                            alert("Failed to save grid visualization");
+                          }
+                        };
+
                         return (
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-                            {layerMeans.map((layerData: number[][], l: number) => (
-                              <AttentionHeatmap
-                                key={l}
-                                data={layerData}
-                                tokens={tokens}
-                                title={`Layer ${l}`}
-                                size={15} // Smaller size for grid
-                              />
-                            ))}
+                          <div>
+                            <div style={{ marginBottom: '10px' }}>
+                              <button onClick={handleSaveGrid} className="save-btn">
+                                Save All Layers
+                              </button>
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                              {layerMeans.map((layerData: number[][], l: number) => (
+                                <AttentionHeatmap
+                                  key={l}
+                                  data={layerData}
+                                  tokens={tokens}
+                                  title={`Layer ${l}`}
+                                  size={15} // Smaller size for grid
+                                />
+                              ))}
+                            </div>
                           </div>
                         );
                       }
@@ -828,65 +906,68 @@ function App() {
         )}
       </main>
 
+
       {/* Global Fixed Tooltip */}
-      {tooltipData && (() => {
-        const TOOLTIP_WIDTH = 200; // approximate width
-        const TOOLTIP_HEIGHT = 150; // approximate height
-        const VIEWPORT_PADDING = 10;
+      {
+        tooltipData && (() => {
+          const TOOLTIP_WIDTH = 200; // approximate width
+          const TOOLTIP_HEIGHT = 150; // approximate height
+          const VIEWPORT_PADDING = 10;
 
-        let top = tooltipData.rect.bottom + 4;
-        let left = tooltipData.rect.left + (tooltipData.rect.width / 2);
+          let top = tooltipData.rect.bottom + 4;
+          let left = tooltipData.rect.left + (tooltipData.rect.width / 2);
 
-        // Vertical boundary check
-        if (top + TOOLTIP_HEIGHT > window.innerHeight) {
-          top = tooltipData.rect.top - TOOLTIP_HEIGHT - 4; // Show above
-        }
+          // Vertical boundary check
+          if (top + TOOLTIP_HEIGHT > window.innerHeight) {
+            top = tooltipData.rect.top - TOOLTIP_HEIGHT - 4; // Show above
+          }
 
-        // Horizontal boundary check
-        if (left + (TOOLTIP_WIDTH / 2) > window.innerWidth - VIEWPORT_PADDING) {
-          left = window.innerWidth - (TOOLTIP_WIDTH / 2) - VIEWPORT_PADDING;
-        } else if (left - (TOOLTIP_WIDTH / 2) < VIEWPORT_PADDING) {
-          left = (TOOLTIP_WIDTH / 2) + VIEWPORT_PADDING;
-        }
+          // Horizontal boundary check
+          if (left + (TOOLTIP_WIDTH / 2) > window.innerWidth - VIEWPORT_PADDING) {
+            left = window.innerWidth - (TOOLTIP_WIDTH / 2) - VIEWPORT_PADDING;
+          } else if (left - (TOOLTIP_WIDTH / 2) < VIEWPORT_PADDING) {
+            left = (TOOLTIP_WIDTH / 2) + VIEWPORT_PADDING;
+          }
 
-        return (
-          <div style={{
-            position: 'fixed',
-            top: top,
-            left: left,
-            transform: 'translateX(-50%)',
-            backgroundColor: '#1a1a1a',
-            border: '1px solid #444',
-            borderRadius: '4px',
-            padding: '8px',
-            zIndex: 9999, // High z-index to ensure it's on top
-            minWidth: '180px',
-            boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
-            pointerEvents: 'none', // Prevent tooltip from interfering with mouse events
-            whiteSpace: 'nowrap'
-          }}>
-            <div style={{ fontSize: '0.8em', fontWeight: 'bold', marginBottom: '6px', color: '#aaa' }}>
-              {tooltipData.layerName} - Pos {tooltipData.token}
-            </div>
-            {tooltipData.preds.map((pred, idx) => (
-              <div key={idx} style={{
-                fontSize: '0.75em',
-                padding: '2px 0',
-                display: 'flex',
-                justifyContent: 'space-between',
-                gap: '12px',
-                color: idx === 0 ? '#fff' : '#ccc'
-              }}>
-                <span style={{ fontWeight: idx === 0 ? 'bold' : 'normal' }}>
-                  {idx + 1}. {pred.token}
-                </span>
-                <span style={{ color: '#888' }}>{(pred.prob * 100).toFixed(1)}%</span>
+          return (
+            <div style={{
+              position: 'fixed',
+              top: top,
+              left: left,
+              transform: 'translateX(-50%)',
+              backgroundColor: '#1a1a1a',
+              border: '1px solid #444',
+              borderRadius: '4px',
+              padding: '8px',
+              zIndex: 9999, // High z-index to ensure it's on top
+              minWidth: '180px',
+              boxShadow: '0 4px 6px rgba(0,0,0,0.3)',
+              pointerEvents: 'none', // Prevent tooltip from interfering with mouse events
+              whiteSpace: 'nowrap'
+            }}>
+              <div style={{ fontSize: '0.8em', fontWeight: 'bold', marginBottom: '6px', color: '#aaa' }}>
+                {tooltipData.layerName} - Pos {tooltipData.token}
               </div>
-            ))}
-          </div>
-        );
-      })()}
-    </div>
+              {tooltipData.preds.map((pred, idx) => (
+                <div key={idx} style={{
+                  fontSize: '0.75em',
+                  padding: '2px 0',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: '12px',
+                  color: idx === 0 ? '#fff' : '#ccc'
+                }}>
+                  <span style={{ fontWeight: idx === 0 ? 'bold' : 'normal' }}>
+                    {idx + 1}. {pred.token}
+                  </span>
+                  <span style={{ color: '#888' }}>{(pred.prob * 100).toFixed(1)}%</span>
+                </div>
+              ))}
+            </div>
+          );
+        })()
+      }
+    </div >
   )
 }
 

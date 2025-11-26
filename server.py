@@ -290,6 +290,18 @@ def inference(req: InferenceRequest):
     # We will NOT put hidden_states/logits in the config JSON anymore to keep it light.
     # They will be saved to NPZ.
     
+    tensors_to_save = {
+        "hidden_states": np.stack([h.cpu().numpy() for h in states_to_process]), # Stack to (layers, batch, seq, hidden)
+        "logits": outputs["logits"].cpu().numpy(),
+        "layer_names": np.array(layer_names),
+        "post_attention_states": np.stack([h.cpu().numpy() for h in outputs["post_attention_states"]])
+    }
+
+    if "attentions" in outputs:
+        # Stack attentions: [layers, batch, heads, seq, seq]
+        # outputs["attentions"] is tuple of tensors
+        tensors_to_save["attentions"] = np.stack([a.cpu().numpy() for a in outputs["attentions"]])
+
     last_run_state = {
         "config": {
             "text": req.text,
@@ -302,12 +314,7 @@ def inference(req: InferenceRequest):
                 "logit_lens": lens_data
             }
         },
-        "tensors": {
-            "hidden_states": np.stack([h.cpu().numpy() for h in states_to_process]), # Stack to (layers, batch, seq, hidden)
-            "logits": outputs["logits"].cpu().numpy(),
-            "layer_names": np.array(layer_names),
-            "post_attention_states": np.stack([h.cpu().numpy() for h in outputs["post_attention_states"]])
-        }
+        "tensors": tensors_to_save
     }
 
     response = {
@@ -408,6 +415,10 @@ def load_session(req: LoadSessionRequest):
     import json
     with open(config_path, 'r') as f:
         config = json.load(f)
+
+    # Ensure apply_chat_template exists for legacy sessions
+    if "apply_chat_template" not in config:
+        config["apply_chat_template"] = False
         
     # Load Tensors (Optional for UI, but good for state restoration)
     tensors_path = os.path.join(session_dir, "tensors.npz")
@@ -423,6 +434,97 @@ def load_session(req: LoadSessionRequest):
     }
     
     return config
+
+class SaveVisualizationRequest(BaseModel):
+    attention_data: List[List[float]]
+    tokens: List[str]
+    title: str
+
+import matplotlib
+matplotlib.use('Agg') # Use non-interactive backend for server
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+@app.post("/save_visualization")
+def save_visualization(req: SaveVisualizationRequest):
+    import datetime
+
+    viz_dir = "attention_visualizations"
+    if not os.path.exists(viz_dir):
+        os.makedirs(viz_dir)
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_title = "".join([c if c.isalnum() else "_" for c in req.title])
+    filename = f"{timestamp}_{safe_title}.png"
+    filepath = os.path.join(viz_dir, filename)
+
+    try:
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(req.attention_data, xticklabels=req.tokens, yticklabels=req.tokens, cmap="viridis")
+        plt.title(req.title)
+        plt.xlabel("Key Token")
+        plt.ylabel("Query Token")
+        plt.xticks(rotation=45, ha='right')
+        plt.yticks(rotation=0)
+        plt.tight_layout()
+        plt.savefig(filepath)
+        plt.close()
+        
+        return {"status": "success", "filepath": filepath}
+    except Exception as e:
+        print(f"Error saving visualization: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class SaveGridVisualizationRequest(BaseModel):
+    grid_data: List[List[List[float]]] # List of matrices
+    tokens: List[str]
+    title: str
+    grid_type: str # "layer_grid" or "head_grid"
+
+@app.post("/save_grid_visualization")
+def save_grid_visualization(req: SaveGridVisualizationRequest):
+    import datetime
+    import math
+
+    viz_dir = "attention_visualizations"
+    if not os.path.exists(viz_dir):
+        os.makedirs(viz_dir)
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_title = "".join([c if c.isalnum() else "_" for c in req.title])
+    filename = f"{timestamp}_{safe_title}.png"
+    filepath = os.path.join(viz_dir, filename)
+
+    try:
+        num_plots = len(req.grid_data)
+        cols = 4
+        rows = math.ceil(num_plots / cols)
+        
+        fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4))
+        axes = axes.flatten()
+
+        for i, ax in enumerate(axes):
+            if i < num_plots:
+                sns.heatmap(req.grid_data[i], xticklabels=req.tokens, yticklabels=req.tokens, cmap="viridis", ax=ax, cbar=False)
+                sub_title = f"Layer {i}" if req.grid_type == "layer_grid" else f"Head {i}"
+                ax.set_title(sub_title)
+                ax.set_xlabel("")
+                ax.set_ylabel("")
+                # Only show labels for bottom/left plots to reduce clutter? Or all?
+                # Let's show all for now but maybe small font
+                ax.tick_params(axis='x', rotation=45, labelsize=8)
+                ax.tick_params(axis='y', rotation=0, labelsize=8)
+            else:
+                ax.axis('off')
+
+        plt.tight_layout()
+        plt.savefig(filepath)
+        plt.close()
+        
+        return {"status": "success", "filepath": filepath}
+    except Exception as e:
+        print(f"Error saving grid visualization: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
