@@ -1,6 +1,6 @@
 # Logit Lens Llama Advanced
 
-An interactive tool to analyze and intervene on Llama model internal states. Now updated to support Instruct Llama models, and visualize Attention!
+An interactive tool to analyze and intervene on Llama model internal states. Now updated to support Instruct Llama models, and visualize attentions!
 
 ## Demo
 
@@ -11,6 +11,7 @@ Now supports Instruct models, and visualize Attention!
 | Attention Visualization | Instruct Model |
 |------------------------|----------------|
 | ![attention_visualization](images/attention_visualization.png) | ![instruct_model](images/instruct_model.png) |
+
 ## Features
 
 - **Interactive Logit Lens**: Visualize the model's prediction at every layer (Embeddings -> Layers -> Output).
@@ -23,7 +24,7 @@ Now supports Instruct models, and visualize Attention!
 - **Session Management**: Save and load your analysis sessions (config + full tensor state).
     - Sessions will be saved to `saved_states/` directory. 
     - Interventions, LogitLens results are saved in the `config.json` file
-    - Activations are saved in the `tensors.npz` file. These can be used for futher experiments (L2 norm, cosine similarity, etc.)
+    - Activations are saved in the `tensors.npz` file. These can be used for further experiments (L2 norm, cosine similarity, etc.)
         - Update on Nov 25, 2025: Now includes attention scores in the `tensors.npz` file.
     - Size of `tensors.npz` file is large. Keep it in mind. (73MB for 3.2 3B 51 tokens)
 - **Attention Visualization**: Visualize attention scores. You have option to visualize
@@ -62,6 +63,21 @@ In order to access Llama models from meta-llama you would need to set up a [hugg
     ```
 
 3.  Open `http://localhost:5173` in your browser.
+
+## Minor Quirks
+If you don't have Llama models in your cache, the program will attempt to download them from huggingface. Current UI doesn't give any indication of this, and appear to be frozen.
+
+Stream intervention's Attention Output modification modifies the attention output right before adding to the residual stream. Thus, this intervention wouldn't be seen in visualize attention.
+
+## TODO
+
+- [ ] Add support for Qwen models
+- [ ] Create better UI indications
+- [ ] Create a diff screen
+    - [ ] Diff based on interventions
+    - [ ] Diff based on model checkpoints
+- [ ] Activation Analysis Tools
+
 
 ## License
 

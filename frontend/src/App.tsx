@@ -549,7 +549,7 @@ function App() {
                 {streamType === 'scale' && (
                   <input type="number" id="stream-val-input" placeholder="Value" defaultValue={0} step={0.1} style={{ width: '60px' }} />
                 )}
-                <input type="number" id="stream-token-input" placeholder="Token Idx (opt)" style={{ width: '100px' }} />
+                <input type="number" id="stream-token-input" placeholder="Token Idx (opt)" style={{ width: '110px' }} />
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
                   <input
                     type="checkbox"
