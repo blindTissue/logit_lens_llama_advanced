@@ -1,6 +1,6 @@
 # Logit Lens Llama Advanced
 
-An interactive tool to analyze and intervene on Llama model internal states. Now updated to support Instruct Llama models, and visualize attentions!
+An interactive tool to analyze and intervene on LLM internal states. Now updated to support Llama Models and Qwen Models
 
 ## Demo
 
@@ -71,7 +71,7 @@ Stream intervention's Attention Output modification modifies the attention outpu
 
 ## TODO
 
-- [ ] Add support for Qwen models
+- [X] Add support for Qwen models
 - [ ] Create better UI indications
 - [ ] Create a diff screen
     - [ ] Diff based on interventions

@@ -12,6 +12,7 @@ export interface LayerData {
 
 export interface InferenceResponse {
   text: string;
+  input_tokens: string[]; // Actual input tokens for display
   logit_lens: LayerData[];
   attention?: number[][][][]; // [layers, heads, seq, seq]
 }

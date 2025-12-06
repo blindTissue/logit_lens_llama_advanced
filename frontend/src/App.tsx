@@ -69,6 +69,35 @@ const AttentionHeatmap = ({ data, tokens, title, size = 30, saveName }: { data: 
 
 const API_URL = 'http://localhost:8000';
 
+/**
+ * Check if a model is an instruct/chat model that should use chat templates.
+ * - Llama: models with "Instruct" or "Chat" in name
+ * - Qwen3: models WITHOUT "-Base" suffix (Qwen3 default models are instruct)
+ */
+function isInstructModel(modelName: string): boolean {
+  // Explicit instruct/chat indicators
+  if (modelName.includes("Instruct") || modelName.includes("Chat")) {
+    return true;
+  }
+  // Qwen3 models: default (no suffix) are instruct, "-Base" are base models
+  if (modelName.includes("Qwen3") && !modelName.includes("-Base")) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Format a token for display, making whitespace characters visible.
+ */
+function formatToken(token: string): string {
+  if (token === '\n') return '\\n';
+  if (token === '\t') return '\\t';
+  if (token === '\r') return '\\r';
+  if (token === '') return '␣';
+  if (token.trim() === '') return '␣';
+  return token;
+}
+
 function App() {
   const [text, setText] = useState("The capital of France is");
   const [interventions, setInterventions] = useState<Interventions>({});
@@ -137,12 +166,8 @@ function App() {
     setSelectedModel(newModel);
     setModelLoaded(false);
 
-    // Auto-enable chat template for Instruct/Chat models, disable for others
-    if (newModel.toLowerCase().includes("instruct") || newModel.toLowerCase().includes("chat")) {
-      setUseChatTemplate(true);
-    } else {
-      setUseChatTemplate(false);
-    }
+    // Auto-enable chat template for instruct/chat models, disable for base models
+    setUseChatTemplate(isInstructModel(newModel));
 
     loadModel(newModel);
   };
@@ -360,14 +385,24 @@ function App() {
   return (
     <div className="app-container">
       <header>
-        <h1>LogitLens Llama Advanced</h1>
+        <h1>LogitLens Advanced</h1>
         <div className="header-controls flex-row" style={{ alignItems: 'center', gap: '1rem' }}>
           <select value={selectedModel} onChange={handleModelChange} disabled={loading}>
-            <option value="meta-llama/Llama-3.2-3B">Llama 3.2 3B</option>
-            <option value="meta-llama/Llama-3.2-1B">Llama 3.2 1B</option>
-            <option value="meta-llama/Llama-3.2-1B-Instruct">Llama 3.2 1B Instruct</option>
-            <option value="meta-llama/Llama-3.2-3B-Instruct">Llama 3.2 3B Instruct</option>
-            <option value="TinyLlama/TinyLlama-1.1B-Chat-v1.0">TinyLlama 1.1B</option>
+            <optgroup label="Llama Models">
+              <option value="meta-llama/Llama-3.2-1B">Llama 3.2 1B</option>
+              <option value="meta-llama/Llama-3.2-3B">Llama 3.2 3B</option>
+              <option value="meta-llama/Llama-3.2-1B-Instruct">Llama 3.2 1B Instruct</option>
+              <option value="meta-llama/Llama-3.2-3B-Instruct">Llama 3.2 3B Instruct</option>
+              <option value="TinyLlama/TinyLlama-1.1B-Chat-v1.0">TinyLlama 1.1B</option>
+            </optgroup>
+            <optgroup label="Qwen3 Models">
+              <option value="Qwen/Qwen3-0.6B">Qwen3 0.6B (Instruct)</option>
+              <option value="Qwen/Qwen3-0.6B-Base">Qwen3 0.6B Base</option>
+              <option value="Qwen/Qwen3-1.7B">Qwen3 1.7B (Instruct)</option>
+              <option value="Qwen/Qwen3-1.7B-Base">Qwen3 1.7B Base</option>
+              <option value="Qwen/Qwen3-4B">Qwen3 4B (Instruct)</option>
+              <option value="Qwen/Qwen3-4B-Base">Qwen3 4B Base</option>
+            </optgroup>
           </select>
 
           <label
@@ -376,16 +411,16 @@ function App() {
               alignItems: 'center',
               gap: '0.3rem',
               fontSize: '0.9em',
-              opacity: (selectedModel.includes("Instruct") || selectedModel.includes("Chat")) ? 1 : 0.5,
-              cursor: (selectedModel.includes("Instruct") || selectedModel.includes("Chat")) ? 'pointer' : 'not-allowed'
+              opacity: isInstructModel(selectedModel) ? 1 : 0.5,
+              cursor: isInstructModel(selectedModel) ? 'pointer' : 'not-allowed'
             }}
-            title={!(selectedModel.includes("Instruct") || selectedModel.includes("Chat")) ? "This is a base model and should not be used with a chat template." : ""}
+            title={!isInstructModel(selectedModel) ? "This is a base model and should not be used with a chat template." : ""}
           >
             <input
               type="checkbox"
               checked={useChatTemplate}
               onChange={(e) => setUseChatTemplate(e.target.checked)}
-              disabled={loading || !(selectedModel.includes("Instruct") || selectedModel.includes("Chat"))}
+              disabled={loading || !isInstructModel(selectedModel)}
             />
             Use Chat Template
           </label>
@@ -673,11 +708,62 @@ function App() {
             <div className="logit-lens-view" style={{ overflowX: 'auto' }}>
               <table style={{ borderCollapse: 'collapse', width: '100%' }}>
                 <thead>
-                  <tr>
-                    <th style={{ textAlign: 'left', padding: '8px', borderBottom: '1px solid #333', minWidth: '120px', position: 'sticky', left: 0, background: 'var(--surface-color)', zIndex: 1 }}>Layer</th>
+                  {/* Input tokens row */}
+                  <tr style={{ backgroundColor: 'rgba(0,0,0,0.3)' }}>
+                    <th style={{
+                      textAlign: 'left',
+                      padding: '6px 8px',
+                      borderBottom: '1px solid #444',
+                      minWidth: '120px',
+                      position: 'sticky',
+                      left: 0,
+                      background: 'rgba(30,30,30,0.95)',
+                      zIndex: 1,
+                      fontSize: '0.75em',
+                      color: '#888',
+                      fontWeight: 'normal'
+                    }}>Input</th>
+                    {results.input_tokens?.map((token, i) => (
+                      <th key={i} style={{
+                        padding: '6px 8px',
+                        borderBottom: '1px solid #444',
+                        minWidth: '80px',
+                        textAlign: 'center',
+                        fontSize: '0.85em',
+                        color: '#ccc',
+                        fontWeight: 'normal',
+                        fontFamily: 'monospace'
+                      }} title={`Token ${i}: "${token}"`}>
+                        {formatToken(token)}
+                      </th>
+                    ))}
+                  </tr>
+                  {/* Position index row */}
+                  <tr style={{ backgroundColor: 'rgba(0,0,0,0.2)' }}>
+                    <th style={{
+                      textAlign: 'left',
+                      padding: '6px 8px',
+                      borderBottom: '1px solid #444',
+                      minWidth: '120px',
+                      position: 'sticky',
+                      left: 0,
+                      background: 'rgba(30,30,30,0.95)',
+                      zIndex: 1,
+                      fontSize: '0.75em',
+                      color: '#666',
+                      fontWeight: 'normal'
+                    }}>Layer / Position →</th>
                     {results.logit_lens[0]?.predictions.map((_, i) => (
-                      <th key={i} style={{ padding: '8px', borderBottom: '1px solid #333', minWidth: '80px', textAlign: 'center' }}>
-                        Pos {i}
+                      <th key={i} style={{
+                        padding: '6px 8px',
+                        borderBottom: '1px solid #444',
+                        minWidth: '80px',
+                        textAlign: 'center',
+                        fontSize: '0.75em',
+                        color: '#666',
+                        fontWeight: 'normal'
+                      }}>
+                        [{i}]
                       </th>
                     ))}
                   </tr>
@@ -809,7 +895,9 @@ function App() {
                     </p>
 
                     {(() => {
-                      const tokens = results.logit_lens[0].predictions.map((p: any) => p[0].token);
+                      // Use actual input tokens instead of embedding predictions, with formatting for display
+                      const rawTokens = results.input_tokens || results.logit_lens[0].predictions.map((p: any) => p[0].token);
+                      const tokens = rawTokens.map(formatToken);
                       const attnData = results.attention; // [layers, heads, seq, seq]
 
                       if (!attnData || !attnData.length) return <div>No attention data</div>;

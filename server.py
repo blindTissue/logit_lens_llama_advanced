@@ -1,13 +1,24 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 import torch
 import numpy as np
 from transformers import AutoTokenizer
 from model import LlamaModel
+from qwen3_model import Qwen3Model
 from logit_lens import compute_logit_lens, decode_top_k
 from fastapi.middleware.cors import CORSMiddleware
 import os
+
+
+def get_model_class(model_name: str):
+    """Return the appropriate model class based on model name."""
+    model_name_lower = model_name.lower()
+    if "qwen3" in model_name_lower:
+        return Qwen3Model
+    else:
+        # Default to Llama for llama models and others
+        return LlamaModel
 
 app = FastAPI()
 
@@ -88,9 +99,14 @@ def load_model(req: LoadModelRequest):
             
             print(f"Loading {req.model_name}...")
             tokenizer = AutoTokenizer.from_pretrained(req.model_name)
-            model = LlamaModel.from_pretrained(req.model_name, device="cpu") # Use CPU for safety/compatibility first
-            model_config = req.model_name # Store the model name in model_config global variable
-            return {"status": "loaded", "config": str(model.config)}
+
+            # Select the appropriate model class based on model name
+            ModelClass = get_model_class(req.model_name)
+            print(f"Using model class: {ModelClass.__name__}")
+            model = ModelClass.from_pretrained(req.model_name, device="cpu")
+
+            model_config = req.model_name
+            return {"status": "loaded", "model_class": ModelClass.__name__, "config": str(model.config)}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -359,8 +375,12 @@ def inference(req: InferenceRequest):
         "tensors": tensors_to_save
     }
 
+    # Get the actual input tokens for display
+    input_tokens = [tokenizer.decode([tid]) for tid in input_ids[0].tolist()]
+
     response = {
         "text": req.text,
+        "input_tokens": input_tokens,
         "logit_lens": lens_data
     }
 
