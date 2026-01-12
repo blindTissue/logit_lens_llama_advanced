@@ -39,7 +39,11 @@ Now supports Instruct models, and visualize Attention!
 
 1.  **Backend**:
     ```bash
+    # Basic installation (custom backend only)
     uv sync
+
+    # With TransformerLens backend support (recommended)
+    uv sync --extra transformerlens
     ```
 
 2.  **Frontend**:
@@ -47,13 +51,32 @@ Now supports Instruct models, and visualize Attention!
     cd frontend
     npm install
     ```
-In order to access Llama models from meta-llama you would need to set up a [huggingface token](https://huggingface.co/docs/hub/en/security-tokens). 
+
+In order to access Llama models from meta-llama you would need to set up a [huggingface token](https://huggingface.co/docs/hub/en/security-tokens).
+
+## Backend Options
+
+The tool now supports two backend implementations:
+
+- **Custom Backend**: Original implementation control over **Llama** and **Qwen3** architectures
+- **TransformerLens Backend**: Uses the [TransformerLens](https://github.com/neelnanda-io/TransformerLens) library for broader model support (50+ models including GPT-2, Mistral, Phi, Gemma, Qwen1/1.5/2/2.5, and more)
+
+**Important:** Qwen3 models are **only** supported by the Custom Backend. TransformerLens supports Qwen1, Qwen1.5, Qwen2, and Qwen2.5, but not Qwen3 yet.
+
+You can switch between backends in the frontend UI. The UI provides:
+- Predefined model dropdown with popular models
+- **Searchable model browser**: When using TransformerLens backend, select "Browse All TransformerLens Models (200+)..." to access a searchable dropdown with all 200+ officially supported models. Search by model name, family (e.g., "Pythia", "Gemma"), or size (e.g., "160m")
+
+See:
+- [docs/BACKEND_COMPATIBILITY.md](docs/BACKEND_COMPATIBILITY.md) - Complete model compatibility matrix
+- [docs/QUICKSTART.md](docs/QUICKSTART.md) - Quick start guide
+- [docs/BACKENDS.md](docs/BACKENDS.md) - Backend architecture details 
 
 ## Usage
 
 1.  **Start the Backend**:
     ```bash
-    uv run uvicorn server:app --reload --port 8000
+    uv run uvicorn server_v2:app --reload --port 8000
     ```
 
 2.  **Start the Frontend**:
@@ -69,9 +92,44 @@ If you don't have Llama models in your cache, the program will attempt to downlo
 
 Stream intervention's Attention Output modification modifies the attention output right before adding to the residual stream. Thus, this intervention wouldn't be seen in visualize attention.
 
+## Testing
+
+To verify both backends work correctly, run:
+
+```bash
+# Compare Custom vs TransformerLens output (comprehensive test)
+uv run python tests_backend/test_backend_parity.py
+
+# Detailed normalization and probability comparison
+uv run python tests_backend/test_norm_debug.py
+
+# Test attention blocking
+uv run python tests_backend/test_attention_blocking.py
+
+# Basic backend functionality test
+uv run python tests_backend/test_backends.py
+```
+
+**Expected Results:**
+- ✅ Top-1 predictions match 100%
+- ✅ Top-5 overlap 100%
+- ✅ Probability differences <1%
+
+See [docs/TESTING.md](docs/TESTING.md) for detailed test documentation.
+
+## Recent Updates
+
+- **2026-01-13**: Fixed double normalization bug in Custom backend 
+  - Reduced probability differences from 8% to <1%
+- **2026-01-12**: Implemented support for TransformerLens backend.
+- **2025-12**: Added TransformerLens backend support for 50+ models
+- **2025-11**: Added Qwen3 model support
+
 ## TODO
 
 - [X] Add support for Qwen models
+- [X] Add TransformerLens backend support
+- [X] Fix backend parity issues
 - [ ] Create better UI indications
 - [ ] Create a diff screen
     - [ ] Diff based on interventions

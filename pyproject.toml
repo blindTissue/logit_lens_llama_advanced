@@ -16,3 +16,8 @@ dependencies = [
     "transformers>=4.57.1",
     "uvicorn>=0.38.0",
 ]
+
+[project.optional-dependencies]
+transformerlens = [
+    "transformer-lens>=2.0.0",
+]

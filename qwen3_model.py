@@ -1,11 +1,5 @@
 """
-Qwen3 Model Implementation for LogitLens analysis.
-
-Key differences from Llama:
-- Q/K normalization before RoPE (applied per-head)
-- Attention bias is configurable (default False in Qwen3)
-- Explicit head_dim parameter
-- Sliding window attention support (optional)
+Qwen3 Model Implementation for LogitLens analysis
 """
 import torch
 import torch.nn as nn
@@ -33,7 +27,6 @@ class Qwen3Config:
     rope_theta: float = 10000.0
     attention_bias: bool = False  # Qwen3 default is False
     attention_dropout: float = 0.0
-    # Sliding window (optional, not implementing full support for simplicity)
     use_sliding_window: bool = False
     sliding_window: Optional[int] = None
 

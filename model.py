@@ -145,7 +145,6 @@ class LlamaAttention(nn.Module):
         # Causal mask
         if q_len > 1:
              # This is a simplified causal mask for demonstration. 
-             # In production, we need to handle padding and proper causal masking for batching.
              # For now, assuming left-padding or single batch inference.
              mask = torch.full((q_len, q_len), float("-inf"), device=hidden_states.device)
              mask = torch.triu(mask, diagonal=1)

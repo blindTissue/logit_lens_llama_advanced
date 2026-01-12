@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import './App.css'
 import type { InferenceResponse, Interventions } from './types'
+import { SearchableModelDropdown } from './SearchableModelDropdown'
 
 // Simple Heatmap Component
 const AttentionHeatmap = ({ data, tokens, title, size = 30, saveName }: { data: number[][], tokens: string[], title?: string, size?: number, saveName?: string }) => {
@@ -107,10 +108,12 @@ function App() {
   const [modelLoaded, setModelLoaded] = useState(false);
 
   const [selectedModel, setSelectedModel] = useState("meta-llama/Llama-3.2-1B");
+  const [selectedBackend, setSelectedBackend] = useState("custom");
   const [lensType, setLensType] = useState("block_output");
   const [attnAllLayers, setAttnAllLayers] = useState(false);
   const [streamAllLayers, setStreamAllLayers] = useState(false);
   const [useChatTemplate, setUseChatTemplate] = useState(false);
+  const [showMoreModels, setShowMoreModels] = useState(false);
 
   // Attention State
   const [showAttention, setShowAttention] = useState(false);
@@ -133,27 +136,36 @@ function App() {
         if (res.data.model_name) {
           setSelectedModel(res.data.model_name);
         }
+        if (res.data.backend) {
+          setSelectedBackend(res.data.backend);
+        }
       } else {
-        loadModel(selectedModel);
+        loadModel(selectedModel, selectedBackend);
       }
     } catch (err) {
       console.error("Failed to check status", err);
-      loadModel(selectedModel);
+      loadModel(selectedModel, selectedBackend);
     }
   };
 
-  const loadModel = async (modelName: string): Promise<boolean> => {
+  const loadModel = async (modelName: string, backend: string = "custom"): Promise<boolean> => {
     if (loadingRef.current) return false;
     loadingRef.current = true;
 
     try {
       setLoading(true);
-      await axios.post(`${API_URL}/load_model`, { model_name: modelName });
+      setLoadingStatus(`Loading ${modelName}...`);
+      await axios.post(`${API_URL}/load_model`, { model_name: modelName, backend: backend });
       setModelLoaded(true);
+      setSelectedBackend(backend);
+      setLoadingStatus("");
       return true;
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to load model", err);
-      alert("Failed to load model. Check backend console.");
+      const errorMsg = err.response?.data?.detail || err.message || "Unknown error";
+      alert(`Failed to load model "${modelName}".\n\nError: ${errorMsg}\n\nTips:\n- Check that the model name is correct (e.g., "EleutherAI/pythia-160m")\n- For TransformerLens backend, see supported models: https://transformerlensorg.github.io/TransformerLens/generated/model_properties_table.html\n- Check backend console for detailed error logs`);
+      setModelLoaded(false);
+      setLoadingStatus("");
       return false;
     } finally {
       setLoading(false);
@@ -163,13 +175,56 @@ function App() {
 
   const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newModel = e.target.value;
+
+    // Check if user selected "more models" option
+    if (newModel === "__more_models__") {
+      setShowMoreModels(true);
+      return; // Show the searchable dropdown instead
+    }
+
+    setShowMoreModels(false);
     setSelectedModel(newModel);
     setModelLoaded(false);
 
     // Auto-enable chat template for instruct/chat models, disable for base models
     setUseChatTemplate(isInstructModel(newModel));
 
-    loadModel(newModel);
+    loadModel(newModel, selectedBackend);
+  };
+
+  const handleMoreModelsSelect = (modelId: string) => {
+    setSelectedModel(modelId);
+    setModelLoaded(false);
+    setShowMoreModels(false);
+
+    // Auto-enable chat template for instruct/chat models, disable for base models
+    setUseChatTemplate(isInstructModel(modelId));
+
+    loadModel(modelId, selectedBackend);
+  };
+
+  const handleBackendChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newBackend = e.target.value;
+    setSelectedBackend(newBackend);
+    setModelLoaded(false);
+    setShowMoreModels(false); // Reset the searchable dropdown when changing backends
+
+    // Check if current model is compatible with new backend
+    let modelToLoad = selectedModel;
+
+    // If switching to custom backend and currently on a TL-only model, switch to Llama
+    if (newBackend === "custom" && !selectedModel.includes("Llama") && !selectedModel.includes("Qwen3")) {
+      modelToLoad = "meta-llama/Llama-3.2-1B";
+      setSelectedModel(modelToLoad);
+    }
+
+    // If switching to TL backend and currently on Qwen3, switch to Llama
+    if (newBackend === "transformerlens" && selectedModel.includes("Qwen3")) {
+      modelToLoad = "meta-llama/Llama-3.2-1B";
+      setSelectedModel(modelToLoad);
+    }
+
+    loadModel(modelToLoad, newBackend);
   };
 
   const runInference = async (overrides?: {
@@ -322,14 +377,21 @@ function App() {
       }
 
       // Full Load Mode
-      if (json.model_name && json.model_name !== selectedModel) {
-        setLoadingStatus(`Switching model to ${json.model_name}...`);
-        setSelectedModel(json.model_name);
+      const needsModelSwitch = json.model_name && json.model_name !== selectedModel;
+      const needsBackendSwitch = json.backend && json.backend !== selectedBackend;
+
+      if (needsModelSwitch || needsBackendSwitch) {
+        const modelToLoad = json.model_name || selectedModel;
+        const backendToUse = json.backend || selectedBackend;
+
+        setLoadingStatus(`Switching to ${backendToUse} backend with ${modelToLoad}...`);
+        setSelectedModel(modelToLoad);
+        setSelectedBackend(backendToUse);
 
         // Wait for model to load before running inference
-        const success = await loadModel(json.model_name);
+        const success = await loadModel(modelToLoad, backendToUse);
         if (!success) {
-          alert(`Failed to switch to model ${json.model_name}. Inference aborted.`);
+          alert(`Failed to switch to model ${modelToLoad} with ${backendToUse} backend. Inference aborted.`);
           setLoading(false);
           setLoadingStatus("");
           return;
@@ -387,23 +449,84 @@ function App() {
       <header>
         <h1>LogitLens Advanced</h1>
         <div className="header-controls flex-row" style={{ alignItems: 'center', gap: '1rem' }}>
-          <select value={selectedModel} onChange={handleModelChange} disabled={loading}>
-            <optgroup label="Llama Models">
-              <option value="meta-llama/Llama-3.2-1B">Llama 3.2 1B</option>
-              <option value="meta-llama/Llama-3.2-3B">Llama 3.2 3B</option>
-              <option value="meta-llama/Llama-3.2-1B-Instruct">Llama 3.2 1B Instruct</option>
-              <option value="meta-llama/Llama-3.2-3B-Instruct">Llama 3.2 3B Instruct</option>
-              <option value="TinyLlama/TinyLlama-1.1B-Chat-v1.0">TinyLlama 1.1B</option>
-            </optgroup>
-            <optgroup label="Qwen3 Models">
-              <option value="Qwen/Qwen3-0.6B">Qwen3 0.6B (Instruct)</option>
-              <option value="Qwen/Qwen3-0.6B-Base">Qwen3 0.6B Base</option>
-              <option value="Qwen/Qwen3-1.7B">Qwen3 1.7B (Instruct)</option>
-              <option value="Qwen/Qwen3-1.7B-Base">Qwen3 1.7B Base</option>
-              <option value="Qwen/Qwen3-4B">Qwen3 4B (Instruct)</option>
-              <option value="Qwen/Qwen3-4B-Base">Qwen3 4B Base</option>
-            </optgroup>
-          </select>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <label style={{ fontSize: '0.85em', fontWeight: 'bold' }}>Backend:</label>
+            <select value={selectedBackend} onChange={handleBackendChange} disabled={loading} style={{ fontSize: '0.9em' }}>
+              <option value="custom">Custom (Llama/Qwen3)</option>
+              <option value="transformerlens">TransformerLens</option>
+            </select>
+          </div>
+
+          {!showMoreModels ? (
+            <select value={selectedModel} onChange={handleModelChange} disabled={loading}>
+              <optgroup label="Llama Models">
+                <option value="meta-llama/Llama-3.2-1B">Llama 3.2 1B</option>
+                <option value="meta-llama/Llama-3.2-3B">Llama 3.2 3B</option>
+                <option value="meta-llama/Llama-3.2-1B-Instruct">Llama 3.2 1B Instruct</option>
+                <option value="meta-llama/Llama-3.2-3B-Instruct">Llama 3.2 3B Instruct</option>
+                <option value="TinyLlama/TinyLlama-1.1B-Chat-v1.0">TinyLlama 1.1B</option>
+              </optgroup>
+
+              {selectedBackend === "custom" && (
+                <optgroup label="Qwen3 Models (Custom Backend Only)">
+                  <option value="Qwen/Qwen3-0.6B">Qwen3 0.6B (Instruct)</option>
+                  <option value="Qwen/Qwen3-0.6B-Base">Qwen3 0.6B Base</option>
+                  <option value="Qwen/Qwen3-1.7B">Qwen3 1.7B (Instruct)</option>
+                  <option value="Qwen/Qwen3-1.7B-Base">Qwen3 1.7B Base</option>
+                  <option value="Qwen/Qwen3-4B">Qwen3 4B (Instruct)</option>
+                  <option value="Qwen/Qwen3-4B-Base">Qwen3 4B Base</option>
+                </optgroup>
+              )}
+
+              {selectedBackend === "transformerlens" && (
+                <>
+                  <optgroup label="Qwen2.5 Models (TransformerLens)">
+                    <option value="Qwen/Qwen2.5-0.5B">Qwen2.5 0.5B</option>
+                    <option value="Qwen/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B Instruct</option>
+                    <option value="Qwen/Qwen2.5-1.5B">Qwen2.5 1.5B</option>
+                    <option value="Qwen/Qwen2.5-1.5B-Instruct">Qwen2.5 1.5B Instruct</option>
+                    <option value="Qwen/Qwen2.5-3B">Qwen2.5 3B</option>
+                    <option value="Qwen/Qwen2.5-3B-Instruct">Qwen2.5 3B Instruct</option>
+                    <option value="Qwen/Qwen2.5-7B">Qwen2.5 7B</option>
+                    <option value="Qwen/Qwen2.5-7B-Instruct">Qwen2.5 7B Instruct</option>
+                  </optgroup>
+                  <optgroup label="GPT-2 Models (TransformerLens)">
+                    <option value="gpt2">GPT-2 (124M)</option>
+                    <option value="gpt2-medium">GPT-2 Medium (355M)</option>
+                    <option value="gpt2-large">GPT-2 Large (774M)</option>
+                    <option value="gpt2-xl">GPT-2 XL (1.5B)</option>
+                  </optgroup>
+                  <optgroup label="Mistral Models (TransformerLens)">
+                    <option value="mistralai/Mistral-7B-v0.1">Mistral 7B</option>
+                    <option value="mistralai/Mistral-7B-Instruct-v0.1">Mistral 7B Instruct</option>
+                  </optgroup>
+                  <optgroup label="Phi Models (TransformerLens)">
+                    <option value="microsoft/phi-2">Phi-2 (2.7B)</option>
+                    <option value="microsoft/Phi-3-mini-4k-instruct">Phi-3 Mini 4K Instruct</option>
+                  </optgroup>
+                  <optgroup label="Gemma Models (TransformerLens)">
+                    <option value="google/gemma-2b">Gemma 2B</option>
+                    <option value="google/gemma-2b-it">Gemma 2B Instruct</option>
+                    <option value="google/gemma-7b">Gemma 7B</option>
+                    <option value="google/gemma-7b-it">Gemma 7B Instruct</option>
+                  </optgroup>
+                </>
+              )}
+
+              {selectedBackend === "transformerlens" && (
+                <optgroup label="More Models">
+                  <option value="__more_models__">Browse All TransformerLens Models (200+)...</option>
+                </optgroup>
+              )}
+            </select>
+          ) : (
+            <SearchableModelDropdown
+              value={selectedModel}
+              onChange={handleMoreModelsSelect}
+              disabled={loading}
+              onClose={() => setShowMoreModels(false)}
+            />
+          )}
 
           <label
             style={{
