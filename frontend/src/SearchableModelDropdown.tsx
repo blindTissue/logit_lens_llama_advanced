@@ -132,7 +132,8 @@ export const SearchableModelDropdown = ({ value, onChange, disabled, onClose }: 
                 color: '#fff',
                 border: '1px solid #555',
                 borderRadius: '4px',
-                marginBottom: '8px'
+                marginBottom: '8px',
+                boxSizing: 'border-box'
               }}
             />
 

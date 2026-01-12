@@ -65,12 +65,7 @@ The tool now supports two backend implementations:
 
 You can switch between backends in the frontend UI. The UI provides:
 - Predefined model dropdown with popular models
-- **Searchable model browser**: When using TransformerLens backend, select "Browse All TransformerLens Models (200+)..." to access a searchable dropdown with all 200+ officially supported models. Search by model name, family (e.g., "Pythia", "Gemma"), or size (e.g., "160m")
-
-See:
-- [docs/BACKEND_COMPATIBILITY.md](docs/BACKEND_COMPATIBILITY.md) - Complete model compatibility matrix
-- [docs/QUICKSTART.md](docs/QUICKSTART.md) - Quick start guide
-- [docs/BACKENDS.md](docs/BACKENDS.md) - Backend architecture details 
+- **Searchable model browser**: When using TransformerLens backend, select "Browse All TransformerLens Models (211)..." to access a searchable dropdown with 211 officially supported models. Search by model name, family (e.g., "Pythia", "Gemma"), or size (e.g., "160m") 
 
 ## Usage
 

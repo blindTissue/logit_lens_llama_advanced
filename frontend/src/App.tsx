@@ -3,6 +3,7 @@ import axios from 'axios'
 import './App.css'
 import type { InferenceResponse, Interventions } from './types'
 import { SearchableModelDropdown } from './SearchableModelDropdown'
+import { TRANSFORMERLENS_MODELS } from './transformerlens-models'
 
 // Simple Heatmap Component
 const AttentionHeatmap = ({ data, tokens, title, size = 30, saveName }: { data: number[][], tokens: string[], title?: string, size?: number, saveName?: string }) => {
@@ -459,6 +460,37 @@ function App() {
 
           {!showMoreModels ? (
             <select value={selectedModel} onChange={handleModelChange} disabled={loading}>
+              {(() => {
+                // Check if selected model is in the predefined list
+                const predefinedModels = [
+                  "meta-llama/Llama-3.2-1B", "meta-llama/Llama-3.2-3B",
+                  "meta-llama/Llama-3.2-1B-Instruct", "meta-llama/Llama-3.2-3B-Instruct",
+                  "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+                  "Qwen/Qwen3-0.6B", "Qwen/Qwen3-0.6B-Base", "Qwen/Qwen3-1.7B", "Qwen/Qwen3-1.7B-Base", "Qwen/Qwen3-4B", "Qwen/Qwen3-4B-Base",
+                  "Qwen/Qwen2.5-0.5B", "Qwen/Qwen2.5-0.5B-Instruct", "Qwen/Qwen2.5-1.5B", "Qwen/Qwen2.5-1.5B-Instruct",
+                  "Qwen/Qwen2.5-3B", "Qwen/Qwen2.5-3B-Instruct", "Qwen/Qwen2.5-7B", "Qwen/Qwen2.5-7B-Instruct",
+                  "gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl",
+                  "mistralai/Mistral-7B-v0.1", "mistralai/Mistral-7B-Instruct-v0.1",
+                  "microsoft/phi-2", "microsoft/Phi-3-mini-4k-instruct",
+                  "google/gemma-2b", "google/gemma-2b-it", "google/gemma-7b", "google/gemma-7b-it",
+                  "__more_models__"
+                ];
+                const isModelInPredefined = predefinedModels.includes(selectedModel);
+
+                if (!isModelInPredefined && selectedModel !== "__more_models__") {
+                  // Find the model name from TRANSFORMERLENS_MODELS
+                  const modelInfo = TRANSFORMERLENS_MODELS.find(m => m.id === selectedModel);
+                  const displayName = modelInfo ? modelInfo.name : selectedModel;
+
+                  return (
+                    <optgroup label="Currently Selected">
+                      <option value={selectedModel}>{displayName}</option>
+                    </optgroup>
+                  );
+                }
+                return null;
+              })()}
+
               <optgroup label="Llama Models">
                 <option value="meta-llama/Llama-3.2-1B">Llama 3.2 1B</option>
                 <option value="meta-llama/Llama-3.2-3B">Llama 3.2 3B</option>
@@ -515,7 +547,7 @@ function App() {
 
               {selectedBackend === "transformerlens" && (
                 <optgroup label="More Models">
-                  <option value="__more_models__">Browse All TransformerLens Models (200+)...</option>
+                  <option value="__more_models__">Browse All TransformerLens Models (211)...</option>
                 </optgroup>
               )}
             </select>
