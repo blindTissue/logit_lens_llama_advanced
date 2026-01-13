@@ -400,9 +400,11 @@ class Qwen3Model(nn.Module):
             if use_cache:
                 next_decoder_cache += (layer_outputs[1],)
 
+        # Save pre-normalized final hidden state for logit lens
+        all_hidden_states += (hidden_states,)
+
         # Final normalization
         hidden_states = self.norm(hidden_states)
-        all_hidden_states += (hidden_states,)
 
         # LM head
         logits = self.lm_head(hidden_states)

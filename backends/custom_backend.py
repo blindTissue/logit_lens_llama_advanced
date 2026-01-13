@@ -162,14 +162,10 @@ class CustomBackend(BaseBackend):
         states_to_process, layer_names = self._extract_states(outputs, lens_type)
 
         # Compute logit lens
+        # Note: All hidden states are now pre-normalized, so we always apply norm
         lens_data = []
         for i, (state, layer_name) in enumerate(zip(states_to_process, layer_names)):
-            # For "Final Output" state, norm is already applied in model.py line 298-301
-            # So we should NOT apply it again
-            is_final_output = (layer_name == "Final Output")
-            norm_to_use = None if is_final_output else self.model.norm
-
-            logits = compute_logit_lens(state, self.model.lm_head, norm_to_use)
+            logits = compute_logit_lens(state, self.model.lm_head, self.model.norm)
             decoded = decode_top_k(logits, self.tokenizer, k=5)
 
             lens_data.append({
@@ -331,6 +327,10 @@ class CustomBackend(BaseBackend):
 
                 states.append(outputs["hidden_states"][i + 1])
                 names.append(f"L{i} Block Out")
+
+            # Add final output state (after all layers, before final norm)
+            states.append(outputs["hidden_states"][-1])
+            names.append("Final Output")
 
         else:  # block_output
             for i, state in enumerate(outputs["hidden_states"]):

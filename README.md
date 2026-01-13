@@ -1,16 +1,15 @@
 # Logit Lens Llama Advanced
 
-An interactive tool to analyze and intervene on LLM internal states. Now updated to support Llama Models and Qwen Models
+An interactive tool to analyze and intervene on LLM internal states. Now updated to support TransformerLens backend.
 
-## Demo
+## Example
 
-![demo](images/banner.gif)
+![banner](images/banner_image.png)
+Now support visualize Attention and TransformerLens Backend
 
-Now supports Instruct models, and visualize Attention!
-
-| Attention Visualization | Instruct Model |
+| Attention Visualization | TransformerLens Backend |
 |------------------------|----------------|
-| ![attention_visualization](images/attention_visualization.png) | ![instruct_model](images/instruct_model.png) |
+| ![attention_visualization](images/attention_visualization.png) | ![TransformerLens](images/transformer_lens.png) |
 
 ## Features
 
@@ -42,7 +41,7 @@ Now supports Instruct models, and visualize Attention!
     # Basic installation (custom backend only)
     uv sync
 
-    # With TransformerLens backend support (recommended)
+    # With TransformerLens backend support
     uv sync --extra transformerlens
     ```
 
@@ -59,9 +58,7 @@ In order to access Llama models from meta-llama you would need to set up a [hugg
 The tool now supports two backend implementations:
 
 - **Custom Backend**: Original implementation control over **Llama** and **Qwen3** architectures
-- **TransformerLens Backend**: Uses the [TransformerLens](https://github.com/neelnanda-io/TransformerLens) library for broader model support (50+ models including GPT-2, Mistral, Phi, Gemma, Qwen1/1.5/2/2.5, and more)
-
-**Important:** Qwen3 models are **only** supported by the Custom Backend. TransformerLens supports Qwen1, Qwen1.5, Qwen2, and Qwen2.5, but not Qwen3 yet.
+- **TransformerLens Backend**: Uses the [TransformerLens](https://github.com/neelnanda-io/TransformerLens) library for broader model support (200+ models including GPT-2, Mistral, Phi, Gemma, Qwen1/1.5/2/2.5, and more)
 
 You can switch between backends in the frontend UI. The UI provides:
 - Predefined model dropdown with popular models
@@ -83,9 +80,9 @@ You can switch between backends in the frontend UI. The UI provides:
 3.  Open `http://localhost:5173` in your browser.
 
 ## Minor Quirks
-If you don't have Llama models in your cache, the program will attempt to download them from huggingface. Current UI doesn't give any indication of this, and appear to be frozen.
+If you don't have models in your cache, the program will attempt to download them from HuggingFace. Current UI doesn't give indication of this, and appear to be frozen. Check the terminal for progress.
 
-Stream intervention's Attention Output modification modifies the attention output right before adding to the residual stream. Thus, this intervention wouldn't be seen in visualize attention.
+Stream intervention's Attention Output modification modifies the attention output right before adding to the residual stream. Thus, **this intervention wouldn't be seen in visualize attention.**
 
 ## Testing
 
@@ -107,17 +104,14 @@ uv run python tests_backend/test_backends.py
 
 **Expected Results:**
 - ✅ Top-1 predictions match 100%
-- ✅ Top-5 overlap 100%
+- ✅ Top-5 overlap 90%+
 - ✅ Probability differences <1%
 
-See [docs/TESTING.md](docs/TESTING.md) for detailed test documentation.
 
 ## Recent Updates
 
-- **2026-01-13**: Fixed double normalization bug in Custom backend 
-  - Reduced probability differences from 8% to <1%
+- **2026-01-13**: Fixed a bug where the final output was being normalized twice.
 - **2026-01-12**: Implemented support for TransformerLens backend.
-- **2025-12**: Added TransformerLens backend support for 50+ models
 - **2025-11**: Added Qwen3 model support
 
 ## TODO
@@ -125,6 +119,7 @@ See [docs/TESTING.md](docs/TESTING.md) for detailed test documentation.
 - [X] Add support for Qwen models
 - [X] Add TransformerLens backend support
 - [X] Fix backend parity issues
+- [ ] Create updated demo
 - [ ] Create better UI indications
 - [ ] Create a diff screen
     - [ ] Diff based on interventions

@@ -295,11 +295,13 @@ class LlamaModel(nn.Module):
             if use_cache:
                 next_decoder_cache += (layer_outputs[1],)
 
-        hidden_states = self.norm(hidden_states)
-        
+        # Save pre-normalized final hidden state for logit lens
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
-            
+
+        # Apply final normalization
+        hidden_states = self.norm(hidden_states)
+
         logits = self.lm_head(hidden_states)
 
         return {
@@ -333,17 +335,9 @@ class LlamaModel(nn.Module):
         
         model = cls(config)
         
-        # Copy weights
-        # This is a simplified mapping. Might need adjustment based on exact variable names.
         state_dict = hf_model.state_dict()
         my_state_dict = model.state_dict()
         
-        # We need to map HF keys to our keys
-        # HF: model.layers.0.self_attn.q_proj.weight
-        # Ours: layers.0.self_attn.q_proj.weight
-        # HF: model.embed_tokens.weight -> embed_tokens.weight
-        # HF: model.norm.weight -> norm.weight
-        # HF: lm_head.weight -> lm_head.weight
         
         mapped_keys = {}
         for k, v in state_dict.items():
