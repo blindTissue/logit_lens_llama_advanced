@@ -525,6 +525,10 @@ matplotlib.use('Agg') # Use non-interactive backend for server
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+plt.rcParams["pdf.fonttype"] = 42
+plt.rcParams["ps.fonttype"] = 42
+VIZ_SAVE_KWARGS = {"format": "pdf", "bbox_inches": "tight"}
+
 @app.post("/save_visualization")
 def save_visualization(req: SaveVisualizationRequest):
     import datetime
@@ -535,7 +539,7 @@ def save_visualization(req: SaveVisualizationRequest):
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_title = "".join([c if c.isalnum() else "_" for c in req.title])
-    filename = f"{timestamp}_{safe_title}.png"
+    filename = f"{timestamp}_{safe_title}.pdf"
     filepath = os.path.join(viz_dir, filename)
 
     try:
@@ -547,7 +551,7 @@ def save_visualization(req: SaveVisualizationRequest):
         plt.xticks(rotation=45, ha='right')
         plt.yticks(rotation=0)
         plt.tight_layout()
-        plt.savefig(filepath)
+        plt.savefig(filepath, **VIZ_SAVE_KWARGS)
         plt.close()
         
         return {"status": "success", "filepath": filepath}
@@ -572,7 +576,7 @@ def save_grid_visualization(req: SaveGridVisualizationRequest):
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_title = "".join([c if c.isalnum() else "_" for c in req.title])
-    filename = f"{timestamp}_{safe_title}.png"
+    filename = f"{timestamp}_{safe_title}.pdf"
     filepath = os.path.join(viz_dir, filename)
 
     try:
@@ -598,7 +602,7 @@ def save_grid_visualization(req: SaveGridVisualizationRequest):
                 ax.axis('off')
 
         plt.tight_layout()
-        plt.savefig(filepath)
+        plt.savefig(filepath, **VIZ_SAVE_KWARGS)
         plt.close()
         
         return {"status": "success", "filepath": filepath}

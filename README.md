@@ -30,7 +30,7 @@ Now support visualize Attention and TransformerLens Backend
     - Average attention scores across all layers and heads
     - Average attention scores across particular layer
     - Attention scores for a particular head
-    - Furthermore, you can save the attention visualization as a png file by clicking Save button.
+    - Furthermore, you can save the attention visualization as a PDF file (vector, LaTeX-friendly) by clicking Save button.
         - Some examples can be found in the `attention_visualizations/` directory.
     
 
@@ -125,6 +125,23 @@ uv run python tests_backend/test_backends.py
     - [ ] Diff based on interventions
     - [ ] Diff based on model checkpoints
 - [ ] Activation Analysis Tools
+
+
+## Citation
+
+If you use this tool in your research, please cite the repository and the methods it builds on.
+
+### This software
+
+```bibtex
+@software{logit_lens_llama_advanced,
+  author       = {Kim, Sungwon},
+  title        = {Logit Lens Llama Advanced},
+  year         = {2026},
+  url          = {https://github.com/blindTissue/logit_lens_llama_advanced},
+  note         = {Interactive logit lens visualization and intervention for LLMs}
+}
+```
 
 
 ## License
