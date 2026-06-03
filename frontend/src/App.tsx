@@ -5,8 +5,26 @@ import type { InferenceResponse, Interventions } from './types'
 import { SearchableModelDropdown } from './SearchableModelDropdown'
 import { TRANSFORMERLENS_MODELS } from './transformerlens-models'
 
-// Simple Heatmap Component
-const AttentionHeatmap = ({ data, tokens, title, size = 30, saveName }: { data: number[][], tokens: string[], title?: string, size?: number, saveName?: string }) => {
+type AttentionSaveStyle = 'app' | 'colormap' | 'colormap_clean';
+
+// Simple Heatmap Component (matches saved "app" style)
+const AttentionHeatmap = ({
+  data,
+  tokens,
+  title,
+  size = 30,
+  saveName,
+  saveStyle = 'app',
+  includeTitle = true,
+}: {
+  data: number[][];
+  tokens: string[];
+  title?: string;
+  size?: number;
+  saveName?: string;
+  saveStyle?: AttentionSaveStyle;
+  includeTitle?: boolean;
+}) => {
   if (!data || !data.length) return null;
 
   const handleSave = async () => {
@@ -14,7 +32,9 @@ const AttentionHeatmap = ({ data, tokens, title, size = 30, saveName }: { data: 
       const res = await axios.post(`${API_URL}/save_visualization`, {
         attention_data: data,
         tokens: tokens,
-        title: saveName || title || "Attention Heatmap"
+        title: saveName || title || "Attention Heatmap",
+        save_style: saveStyle,
+        include_title: includeTitle,
       });
       alert(`Visualization saved to: ${res.data.filepath}`);
     } catch (err) {
@@ -121,7 +141,8 @@ function App() {
   const [attnAggregation, setAttnAggregation] = useState("all_average"); // Default to "Average All"
   const [attnLayer, setAttnLayer] = useState(0);
   const [attnHead, setAttnHead] = useState(0);
-
+  const [attnSaveStyle, setAttnSaveStyle] = useState<AttentionSaveStyle>('app');
+  const [attnSaveIncludeTitle, setAttnSaveIncludeTitle] = useState(true);
 
   const loadingRef = useRef(false);
 
@@ -989,6 +1010,30 @@ function App() {
 
               {showAttention && (
                 <>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85em' }}>
+                    Save style:
+                    <select
+                      value={attnSaveStyle}
+                      onChange={e => setAttnSaveStyle(e.target.value as AttentionSaveStyle)}
+                      disabled={loading}
+                      title="PDF export style (app matches the table below)"
+                    >
+                      <option value="app">App (green + scores)</option>
+                      <option value="colormap">Colormap + scores</option>
+                      <option value="colormap_clean">Colormap (no scores)</option>
+                    </select>
+                  </label>
+
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.85em' }}>
+                    <input
+                      type="checkbox"
+                      checked={attnSaveIncludeTitle}
+                      onChange={e => setAttnSaveIncludeTitle(e.target.checked)}
+                      disabled={loading}
+                    />
+                    Title on save
+                  </label>
+
                   <select value={attnAggregation} onChange={e => setAttnAggregation(e.target.value)} disabled={loading}>
                     <option value="all_average">Average All</option>
                     <option value="layer_mean">Layer Mean</option>
@@ -1085,7 +1130,7 @@ function App() {
                         }
 
                         const saveName = `${selectedModel.split('/').pop()}_${text.slice(0, 10).replace(/\s+/g, '_')}_AvgAll`;
-                        return <AttentionHeatmap data={avgMatrix} tokens={tokens} title="Average Attention (All Layers & Heads)" saveName={saveName} />;
+                        return <AttentionHeatmap data={avgMatrix} tokens={tokens} title="Average Attention (All Layers & Heads)" saveName={saveName} saveStyle={attnSaveStyle} includeTitle={attnSaveIncludeTitle} />;
                       }
 
                       if (attnAggregation === 'layer_mean') {
@@ -1113,14 +1158,14 @@ function App() {
                         }
 
                         const saveName = `${selectedModel.split('/').pop()}_${text.slice(0, 10).replace(/\s+/g, '_')}_L${attnLayer}_Mean`;
-                        return <AttentionHeatmap data={layerMeanMatrix} tokens={tokens} title={`Layer ${attnLayer} Mean Attention`} saveName={saveName} />;
+                        return <AttentionHeatmap data={layerMeanMatrix} tokens={tokens} title={`Layer ${attnLayer} Mean Attention`} saveName={saveName} saveStyle={attnSaveStyle} includeTitle={attnSaveIncludeTitle} />;
                       }
 
                       if (attnAggregation === 'specific') {
                         const matrix = attnData[attnLayer][attnHead];
                         if (!matrix) return <div>Invalid head</div>;
                         const saveName = `${selectedModel.split('/').pop()}_${text.slice(0, 10).replace(/\s+/g, '_')}_L${attnLayer}_H${attnHead}`;
-                        return <AttentionHeatmap data={matrix} tokens={tokens} title={`Layer ${attnLayer}, Head ${attnHead}`} saveName={saveName} />;
+                        return <AttentionHeatmap data={matrix} tokens={tokens} title={`Layer ${attnLayer}, Head ${attnHead}`} saveName={saveName} saveStyle={attnSaveStyle} includeTitle={attnSaveIncludeTitle} />;
                       }
 
                       if (attnAggregation === 'specific_grid') {
@@ -1133,7 +1178,9 @@ function App() {
                               grid_data: layerData,
                               tokens: tokens,
                               title: `${selectedModel.split('/').pop()}_${text.slice(0, 10).replace(/\s+/g, '_')}_L${attnLayer}_AllHeads`,
-                              grid_type: "head_grid"
+                              grid_type: "head_grid",
+                              save_style: attnSaveStyle,
+                              include_title: attnSaveIncludeTitle,
                             });
                             alert(`Grid visualization saved to: ${res.data.filepath}`);
                           } catch (err) {
@@ -1156,7 +1203,9 @@ function App() {
                                   data={headData}
                                   tokens={tokens}
                                   title={`Head ${h}`}
-                                  size={15} // Smaller size for grid
+                                  size={15}
+                                  saveStyle={attnSaveStyle}
+                                  includeTitle={attnSaveIncludeTitle}
                                 />
                               ))}
                             </div>
@@ -1195,7 +1244,9 @@ function App() {
                               grid_data: layerMeans,
                               tokens: tokens,
                               title: `${selectedModel.split('/').pop()}_${text.slice(0, 10).replace(/\s+/g, '_')}_AllLayers_Mean`,
-                              grid_type: "layer_grid"
+                              grid_type: "layer_grid",
+                              save_style: attnSaveStyle,
+                              include_title: attnSaveIncludeTitle,
                             });
                             alert(`Grid visualization saved to: ${res.data.filepath}`);
                           } catch (err) {
@@ -1218,7 +1269,9 @@ function App() {
                                   data={layerData}
                                   tokens={tokens}
                                   title={`Layer ${l}`}
-                                  size={15} // Smaller size for grid
+                                  size={15}
+                                  saveStyle={attnSaveStyle}
+                                  includeTitle={attnSaveIncludeTitle}
                                 />
                               ))}
                             </div>

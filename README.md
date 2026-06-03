@@ -30,7 +30,7 @@ Now support visualize Attention and TransformerLens Backend
     - Average attention scores across all layers and heads
     - Average attention scores across particular layer
     - Attention scores for a particular head
-    - Furthermore, you can save the attention visualization as a PDF file (vector, LaTeX-friendly) by clicking Save button.
+    - Save attention plots as PDF (LaTeX-friendly). Default **App** style matches the in-app green heatmap with attention scores; optional **Colormap** styles and **Title on save** checkbox in the attention controls.
         - Some examples can be found in the `attention_visualizations/` directory.
     
 

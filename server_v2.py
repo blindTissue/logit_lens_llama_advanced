@@ -15,17 +15,14 @@ from backends.custom_backend import CustomBackend
 from backends.transformerlens_backend import TransformerLensBackend
 from backends.base import BaseBackend
 
-# Visualization imports
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
 
-# Vector PDF with editable fonts (LaTeX-friendly \includegraphics)
-plt.rcParams["pdf.fonttype"] = 42
-plt.rcParams["ps.fonttype"] = 42
-VIZ_SAVE_KWARGS = {"format": "pdf", "bbox_inches": "tight"}
+from attention_viz_save import (
+    DEFAULT_SAVE_STYLE,
+    normalize_save_style,
+    save_attention_grid,
+    save_attention_heatmap,
+)
 
 app = FastAPI()
 
@@ -78,12 +75,16 @@ class SaveVisualizationRequest(BaseModel):
     attention_data: List[List[float]]
     tokens: List[str]
     title: str
+    save_style: str = DEFAULT_SAVE_STYLE
+    include_title: bool = True
 
 class SaveGridVisualizationRequest(BaseModel):
     grid_data: List[List[List[float]]]
     tokens: List[str]
     title: str
     grid_type: str
+    save_style: str = DEFAULT_SAVE_STYLE
+    include_title: bool = True
 
 
 def get_backend(backend_name: str) -> BaseBackend:
@@ -323,17 +324,14 @@ def save_visualization(req: SaveVisualizationRequest):
     filepath = os.path.join(viz_dir, filename)
 
     try:
-        plt.figure(figsize=(12, 10))
-        sns.heatmap(req.attention_data, xticklabels=req.tokens, yticklabels=req.tokens, cmap="viridis")
-        plt.title(req.title)
-        plt.xlabel("Key Token")
-        plt.ylabel("Query Token")
-        plt.xticks(rotation=45, ha='right')
-        plt.yticks(rotation=0)
-        plt.tight_layout()
-        plt.savefig(filepath, **VIZ_SAVE_KWARGS)
-        plt.close()
-
+        save_attention_heatmap(
+            filepath,
+            req.attention_data,
+            req.tokens,
+            req.title,
+            save_style=normalize_save_style(req.save_style),
+            include_title=req.include_title,
+        )
         return {"status": "success", "filepath": filepath}
     except Exception as e:
         print(f"Error saving visualization: {e}")
@@ -342,8 +340,6 @@ def save_visualization(req: SaveVisualizationRequest):
 
 @app.post("/save_grid_visualization")
 def save_grid_visualization(req: SaveGridVisualizationRequest):
-    import math
-
     viz_dir = "attention_visualizations"
     if not os.path.exists(viz_dir):
         os.makedirs(viz_dir)
@@ -354,30 +350,15 @@ def save_grid_visualization(req: SaveGridVisualizationRequest):
     filepath = os.path.join(viz_dir, filename)
 
     try:
-        num_plots = len(req.grid_data)
-        cols = 4
-        rows = math.ceil(num_plots / cols)
-
-        fig, axes = plt.subplots(rows, cols, figsize=(cols * 5, rows * 4))
-        axes = axes.flatten() if num_plots > 1 else [axes]
-
-        for i, ax in enumerate(axes):
-            if i < num_plots:
-                sns.heatmap(req.grid_data[i], xticklabels=req.tokens, yticklabels=req.tokens,
-                          cmap="viridis", ax=ax, cbar=False)
-                sub_title = f"Layer {i}" if req.grid_type == "layer_grid" else f"Head {i}"
-                ax.set_title(sub_title)
-                ax.set_xlabel("")
-                ax.set_ylabel("")
-                ax.tick_params(axis='x', rotation=45, labelsize=8)
-                ax.tick_params(axis='y', rotation=0, labelsize=8)
-            else:
-                ax.axis('off')
-
-        plt.tight_layout()
-        plt.savefig(filepath, **VIZ_SAVE_KWARGS)
-        plt.close()
-
+        save_attention_grid(
+            filepath,
+            req.grid_data,
+            req.tokens,
+            req.title,
+            grid_type=req.grid_type,
+            save_style=normalize_save_style(req.save_style),
+            include_title=req.include_title,
+        )
         return {"status": "success", "filepath": filepath}
     except Exception as e:
         print(f"Error saving grid visualization: {e}")
