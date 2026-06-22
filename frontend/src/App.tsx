@@ -143,11 +143,34 @@ function App() {
   const [attnHead, setAttnHead] = useState(0);
   const [attnSaveStyle, setAttnSaveStyle] = useState<AttentionSaveStyle>('app');
   const [attnSaveIncludeTitle, setAttnSaveIncludeTitle] = useState(true);
+  const [transformerlensAvailable, setTransformerlensAvailable] = useState(true);
+  const [transformerlensInstallHint, setTransformerlensInstallHint] = useState<string | null>(null);
 
   const loadingRef = useRef(false);
+  const downloadConfirmResolver = useRef<((confirmed: boolean) => void) | null>(null);
+  const [downloadConfirmModel, setDownloadConfirmModel] = useState<string | null>(null);
+
+  const requestDownloadConfirm = (modelName: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      downloadConfirmResolver.current = resolve;
+      setDownloadConfirmModel(modelName);
+    });
+  };
+
+  const closeDownloadConfirm = (confirmed: boolean) => {
+    setDownloadConfirmModel(null);
+    downloadConfirmResolver.current?.(confirmed);
+    downloadConfirmResolver.current = null;
+  };
 
   useEffect(() => {
     checkModelStatus();
+    axios.get(`${API_URL}/backends`)
+      .then((res) => {
+        setTransformerlensAvailable(res.data.transformerlens);
+        setTransformerlensInstallHint(res.data.transformerlens_install_hint ?? null);
+      })
+      .catch((err) => console.warn("Failed to fetch backend availability", err));
   }, []);
 
   const checkModelStatus = async () => {
@@ -162,16 +185,52 @@ function App() {
           setSelectedBackend(res.data.backend);
         }
       } else {
-        loadModel(selectedModel, selectedBackend);
+        await loadModel(selectedModel, selectedBackend);
       }
     } catch (err) {
       console.error("Failed to check status", err);
-      loadModel(selectedModel, selectedBackend);
+      await loadModel(selectedModel, selectedBackend);
     }
   };
 
-  const loadModel = async (modelName: string, backend: string = "custom"): Promise<boolean> => {
+  const loadModel = async (
+    modelName: string,
+    backend: string = "custom",
+    options?: { skipCacheCheck?: boolean }
+  ): Promise<boolean> => {
     if (loadingRef.current) return false;
+
+    try {
+      const status = await axios.get(`${API_URL}/model_status`);
+      if (
+        status.data.loaded &&
+        status.data.model_name === modelName &&
+        status.data.backend === backend
+      ) {
+        setModelLoaded(true);
+        setSelectedBackend(backend);
+        return true;
+      }
+    } catch (err) {
+      console.warn("Could not check model status before load", err);
+    }
+
+    if (!options?.skipCacheCheck) {
+      try {
+        const cacheRes = await axios.get(`${API_URL}/model_cache_status`, {
+          params: { model_name: modelName },
+        });
+        if (!cacheRes.data.cached) {
+          const confirmed = await requestDownloadConfirm(modelName);
+          if (!confirmed) {
+            return false;
+          }
+        }
+      } catch (err) {
+        console.warn("Cache check failed; proceeding with load", err);
+      }
+    }
+
     loadingRef.current = true;
 
     try {
@@ -185,7 +244,7 @@ function App() {
     } catch (err: any) {
       console.error("Failed to load model", err);
       const errorMsg = err.response?.data?.detail || err.message || "Unknown error";
-      alert(`Failed to load model "${modelName}".\n\nError: ${errorMsg}\n\nTips:\n- Check that the model name is correct (e.g., "EleutherAI/pythia-160m")\n- For TransformerLens backend, see supported models: https://transformerlensorg.github.io/TransformerLens/generated/model_properties_table.html\n- Check backend console for detailed error logs`);
+      alert(`Failed to load model "${modelName}".\n\nError: ${errorMsg}\n\nTips:\n- Check that the model name is correct (e.g., "EleutherAI/pythia-160m")\n- For TransformerLens backend, see supported models: https://transformerlensorg.github.io/TransformerLens/generated/model_properties_table.html\n- Gated models require a Hugging Face token (HF_TOKEN)\n- Check backend console for detailed error logs`);
       setModelLoaded(false);
       setLoadingStatus("");
       return false;
@@ -195,58 +254,70 @@ function App() {
     }
   };
 
-  const handleModelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleModelChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newModel = e.target.value;
 
-    // Check if user selected "more models" option
     if (newModel === "__more_models__") {
       setShowMoreModels(true);
-      return; // Show the searchable dropdown instead
+      return;
     }
 
     setShowMoreModels(false);
-    setSelectedModel(newModel);
     setModelLoaded(false);
 
-    // Auto-enable chat template for instruct/chat models, disable for base models
-    setUseChatTemplate(isInstructModel(newModel));
-
-    loadModel(newModel, selectedBackend);
+    const success = await loadModel(newModel, selectedBackend);
+    if (success) {
+      setSelectedModel(newModel);
+      setUseChatTemplate(isInstructModel(newModel));
+    }
   };
 
-  const handleMoreModelsSelect = (modelId: string) => {
-    setSelectedModel(modelId);
+  const handleMoreModelsSelect = async (modelId: string) => {
+    setShowMoreModels(false);
+    setModelLoaded(false);
+
+    const success = await loadModel(modelId, selectedBackend);
+    if (success) {
+      setSelectedModel(modelId);
+      setUseChatTemplate(isInstructModel(modelId));
+    }
+  };
+
+  const handleBackendChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newBackend = e.target.value;
+    if (newBackend === "transformerlens" && !transformerlensAvailable) {
+      alert(
+        `TransformerLens is not installed in the backend environment.\n\n` +
+        `Run from the project root:\n  ${transformerlensInstallHint ?? "uv sync --extra transformerlens"}\n\n` +
+        `Then restart the server:\n  uv run uvicorn server_v2:app --reload`
+      );
+      return;
+    }
+    const prevBackend = selectedBackend;
+    const prevModel = selectedModel;
     setModelLoaded(false);
     setShowMoreModels(false);
 
-    // Auto-enable chat template for instruct/chat models, disable for base models
-    setUseChatTemplate(isInstructModel(modelId));
-
-    loadModel(modelId, selectedBackend);
-  };
-
-  const handleBackendChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newBackend = e.target.value;
-    setSelectedBackend(newBackend);
-    setModelLoaded(false);
-    setShowMoreModels(false); // Reset the searchable dropdown when changing backends
-
-    // Check if current model is compatible with new backend
     let modelToLoad = selectedModel;
 
-    // If switching to custom backend and currently on a TL-only model, switch to Llama
     if (newBackend === "custom" && !selectedModel.includes("Llama") && !selectedModel.includes("Qwen3")) {
       modelToLoad = "meta-llama/Llama-3.2-1B";
-      setSelectedModel(modelToLoad);
     }
 
-    // If switching to TL backend and currently on Qwen3, switch to Llama
     if (newBackend === "transformerlens" && selectedModel.includes("Qwen3")) {
       modelToLoad = "meta-llama/Llama-3.2-1B";
-      setSelectedModel(modelToLoad);
     }
 
-    loadModel(modelToLoad, newBackend);
+    const success = await loadModel(modelToLoad, newBackend);
+    if (success) {
+      setSelectedBackend(newBackend);
+      if (modelToLoad !== prevModel) {
+        setSelectedModel(modelToLoad);
+        setUseChatTemplate(isInstructModel(modelToLoad));
+      }
+    } else {
+      setSelectedBackend(prevBackend);
+    }
   };
 
   const runInference = async (overrides?: {
@@ -407,10 +478,7 @@ function App() {
         const backendToUse = json.backend || selectedBackend;
 
         setLoadingStatus(`Switching to ${backendToUse} backend with ${modelToLoad}...`);
-        setSelectedModel(modelToLoad);
-        setSelectedBackend(backendToUse);
 
-        // Wait for model to load before running inference
         const success = await loadModel(modelToLoad, backendToUse);
         if (!success) {
           alert(`Failed to switch to model ${modelToLoad} with ${backendToUse} backend. Inference aborted.`);
@@ -418,6 +486,8 @@ function App() {
           setLoadingStatus("");
           return;
         }
+        setSelectedModel(modelToLoad);
+        setSelectedBackend(backendToUse);
       }
 
       // setShowLoadModal(false); // Don't close here, wait for inference
@@ -475,8 +545,15 @@ function App() {
             <label style={{ fontSize: '0.85em', fontWeight: 'bold' }}>Backend:</label>
             <select value={selectedBackend} onChange={handleBackendChange} disabled={loading} style={{ fontSize: '0.9em' }}>
               <option value="custom">Custom (Llama/Qwen3)</option>
-              <option value="transformerlens">TransformerLens</option>
+              <option value="transformerlens" disabled={!transformerlensAvailable}>
+                TransformerLens{transformerlensAvailable ? "" : " (not installed)"}
+              </option>
             </select>
+            {!transformerlensAvailable && (
+              <span style={{ fontSize: '0.75em', color: '#f59e0b' }} title={transformerlensInstallHint ?? undefined}>
+                Run: {transformerlensInstallHint ?? "uv sync --extra transformerlens"}
+              </span>
+            )}
           </div>
 
           {!showMoreModels ? (
@@ -623,6 +700,56 @@ function App() {
           </div>
         </div>
       </header>
+
+      {downloadConfirmModel && (
+        <div
+          className="modal-overlay"
+          style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.7)', zIndex: 1100,
+            display: 'flex', justifyContent: 'center', alignItems: 'center',
+          }}
+        >
+          <div
+            className="modal-content"
+            style={{
+              backgroundColor: '#1a1a1a', padding: '20px', borderRadius: '8px',
+              width: '440px', maxWidth: '90vw', border: '1px solid #333',
+            }}
+          >
+            <h3 style={{ marginTop: 0 }}>Download model from Hub?</h3>
+            <p style={{ fontSize: '0.9em', color: '#ccc', lineHeight: 1.5 }}>
+              <strong style={{ color: '#f8fafc' }}>{downloadConfirmModel}</strong> is not in your
+              local Hugging Face cache. Loading will download weights from the Hub (this can take a
+              while and use significant disk space).
+            </p>
+            <p style={{ fontSize: '0.85em', color: '#94a3b8' }}>
+              Gated models (e.g. Meta Llama) require{' '}
+              <a href="https://huggingface.co/docs/hub/en/security-tokens" target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>
+                HF_TOKEN
+              </a>
+              . Progress appears in the backend terminal while downloading.
+            </p>
+            <div style={{ display: 'flex', gap: '10px', marginTop: '16px' }}>
+              <button
+                type="button"
+                onClick={() => closeDownloadConfirm(true)}
+                className="primary-btn"
+                style={{ flex: 1, marginTop: 0 }}
+              >
+                Download &amp; load
+              </button>
+              <button
+                type="button"
+                onClick={() => closeDownloadConfirm(false)}
+                style={{ flex: 1, padding: '8px' }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showLoadModal && (
         <div className="modal-overlay" style={{

@@ -23,7 +23,7 @@ Now support visualize Attention and TransformerLens Backend
 - **Session Management**: Save and load your analysis sessions (config + full tensor state).
     - Sessions will be saved to `saved_states/` directory. 
     - Interventions, LogitLens results are saved in the `config.json` file
-    - Activations are saved in the `tensors.npz` file. These can be used for further experiments (L2 norm, cosine similarity, etc.)
+    - Activations are saved in the `tensors.npz` file (`hidden_states`, `layer_names`, `state_kinds`, `lens_type`, `post_attention_states`, …). Layout depends on the logit-lens mode (`block_output`, `combined`, or `post_attention`); use `session_tensors.load_session_archive()` in notebooks.
         - Update on Nov 25, 2025: Now includes attention scores in the `tensors.npz` file.
     - Size of `tensors.npz` file is large. Keep it in mind. (73MB for 3.2 3B 51 tokens)
 - **Attention Visualization**: Visualize attention scores. You have option to visualize
@@ -38,11 +38,11 @@ Now support visualize Attention and TransformerLens Backend
 
 1.  **Backend**:
     ```bash
-    # Basic installation (custom backend only)
-    uv sync
-
-    # With TransformerLens backend support
+    # Recommended: custom + TransformerLens backends
     uv sync --extra transformerlens
+
+    # Custom backend only (smaller install; TransformerLens option disabled in UI)
+    uv sync
     ```
 
 2.  **Frontend**:
@@ -80,7 +80,7 @@ You can switch between backends in the frontend UI. The UI provides:
 3.  Open `http://localhost:5173` in your browser.
 
 ## Minor Quirks
-If you don't have models in your cache, the program will attempt to download them from HuggingFace. Current UI doesn't give indication of this, and appear to be frozen. Check the terminal for progress.
+If a model is not in your local Hugging Face cache, the UI prompts before downloading from the Hub. While downloading, the app may look frozen—check the backend terminal for progress (gated models need `HF_TOKEN`).
 
 Stream intervention's Attention Output modification modifies the attention output right before adding to the residual stream. Thus, **this intervention wouldn't be seen in visualize attention.**
 

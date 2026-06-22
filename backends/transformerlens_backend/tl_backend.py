@@ -8,17 +8,22 @@ from typing import Dict, Any, List, Optional, Tuple
 from transformers import AutoTokenizer
 import gc
 
+TRANSFORMER_LENS_INSTALL_HINT = "uv sync --extra transformerlens"
+_TRANSFORMER_LENS_IMPORT_ERROR: Optional[BaseException] = None
+
 try:
     from transformer_lens import HookedTransformer
     TRANSFORMER_LENS_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     TRANSFORMER_LENS_AVAILABLE = False
     HookedTransformer = None
+    _TRANSFORMER_LENS_IMPORT_ERROR = e
 
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from backends.base import BaseBackend
+from session_tensors import build_tensor_archive, extract_states_from_tl_cache
 
 
 class TransformerLensBackend(BaseBackend):
@@ -27,9 +32,10 @@ class TransformerLensBackend(BaseBackend):
     def __init__(self):
         if not TRANSFORMER_LENS_AVAILABLE:
             raise ImportError(
-                "TransformerLens is not installed. "
-                "Install it with: pip install transformer-lens"
-            )
+                "TransformerLens is not installed in this Python environment. "
+                f"From the project root run: {TRANSFORMER_LENS_INSTALL_HINT} "
+                "then restart the backend (uv run uvicorn server_v2:app --reload)."
+            ) from _TRANSFORMER_LENS_IMPORT_ERROR
         self.model = None
         self.tokenizer = None
         self.model_name = None
@@ -178,26 +184,44 @@ class TransformerLensBackend(BaseBackend):
                     names_filter=lambda name: True  # Cache everything
                 )
 
-        # Extract hidden states based on lens_type
-        states_to_process, layer_names = self._extract_states(cache, lens_type)
+        n_layers = self.model.cfg.n_layers
+        states_to_process, layer_names, state_kinds = extract_states_from_tl_cache(
+            cache, lens_type, n_layers
+        )
 
-        # Compute logit lens for each state
         lens_data = self._compute_logit_lens(states_to_process, layer_names)
 
-        # Get input tokens
         input_tokens = [self.tokenizer.decode([tid]) for tid in input_ids[0].tolist()]
 
-        # Prepare response
+        post_attn_states = [
+            cache[f"blocks.{i}.hook_resid_mid"] for i in range(n_layers)
+        ]
+        tensors = build_tensor_archive(
+            states=states_to_process,
+            layer_names=layer_names,
+            state_kinds=state_kinds,
+            lens_type=lens_type,
+            num_hidden_layers=n_layers,
+            logits=logits,
+            post_attention_states=post_attn_states,
+            attentions=None,
+        )
+
         response = {
             "text": text,
             "input_tokens": input_tokens,
             "logit_lens": lens_data,
-            "tensors": self._prepare_tensors(states_to_process, layer_names, cache, logits)
+            "tensors": tensors,
         }
 
-        # Add attention if requested
         if return_attention:
             response["attention"] = self._extract_attention(cache)
+            tensors["attentions"] = np.stack(
+                [
+                    cache[f"blocks.{i}.attn.hook_pattern"].cpu().numpy()
+                    for i in range(n_layers)
+                ]
+            )
 
         return response
 
@@ -366,53 +390,6 @@ class TransformerLensBackend(BaseBackend):
 
         return hook_fn
 
-    def _extract_states(self, cache, lens_type: str) -> Tuple[List[torch.Tensor], List[str]]:
-        """Extract hidden states based on lens_type."""
-        states = []
-        names = []
-
-        if lens_type == "block_output":
-            # Get embedding + all block outputs
-            states.append(cache["hook_embed"])
-            names.append("Embeddings")
-
-            for i in range(self.model.cfg.n_layers):
-                states.append(cache[f"blocks.{i}.hook_resid_post"])
-                names.append(f"Layer {i}")
-
-            # Last one is final output
-            names[-1] = "Final Output"
-
-        elif lens_type == "post_attention":
-            # Get embedding + post-attention states
-            states.append(cache["hook_embed"])
-            names.append("Embeddings")
-
-            for i in range(self.model.cfg.n_layers):
-                # Post-attention = resid_pre + attn_out
-                states.append(cache[f"blocks.{i}.hook_resid_mid"])
-                names.append(f"L{i} Post-Attn")
-
-            # Add final output
-            states.append(cache[f"blocks.{self.model.cfg.n_layers - 1}.hook_resid_post"])
-            names.append("Final Output")
-
-        elif lens_type == "combined":
-            # Interleave post-attention and block outputs
-            states.append(cache["hook_embed"])
-            names.append("Embeddings")
-
-            for i in range(self.model.cfg.n_layers):
-                # Post-attention
-                states.append(cache[f"blocks.{i}.hook_resid_mid"])
-                names.append(f"L{i} Post-Attn")
-
-                # Block output
-                states.append(cache[f"blocks.{i}.hook_resid_post"])
-                names.append(f"L{i} Block Out")
-
-        return states, names
-
     def _compute_logit_lens(self, states: List[torch.Tensor], layer_names: List[str]) -> List[Dict]:
         """Compute logit lens predictions for each state."""
         lens_data = []
@@ -454,32 +431,6 @@ class TransformerLensBackend(BaseBackend):
             seq_results.append(token_data)
 
         return seq_results
-
-    def _prepare_tensors(
-        self,
-        states: List[torch.Tensor],
-        layer_names: List[str],
-        cache,
-        logits: torch.Tensor
-    ) -> Dict[str, np.ndarray]:
-        """Prepare tensors for saving."""
-        tensors = {
-            "hidden_states": np.stack([s.cpu().numpy() for s in states]),
-            "logits": logits.cpu().numpy(),
-            "layer_names": np.array(layer_names)
-        }
-
-        # Extract post-attention states if available
-        post_attn_states = []
-        for i in range(self.model.cfg.n_layers):
-            key = f"blocks.{i}.hook_resid_mid"
-            if key in cache:
-                post_attn_states.append(cache[key].cpu().numpy())
-
-        if post_attn_states:
-            tensors["post_attention_states"] = np.stack(post_attn_states)
-
-        return tensors
 
     def _extract_attention(self, cache) -> List[List[List[List[float]]]]:
         """Extract attention patterns from cache."""

@@ -12,8 +12,13 @@ import shutil
 
 # Import backends
 from backends.custom_backend import CustomBackend
-from backends.transformerlens_backend import TransformerLensBackend
+from backends.transformerlens_backend import (
+    TRANSFORMER_LENS_AVAILABLE,
+    TRANSFORMER_LENS_INSTALL_HINT,
+    TransformerLensBackend,
+)
 from backends.base import BaseBackend
+from model_cache import get_model_cache_status
 
 import numpy as np
 
@@ -134,6 +139,24 @@ def load_model(req: LoadModelRequest):
             import traceback
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/backends")
+def list_backends():
+    """Report which inference backends are available in the current environment."""
+    return {
+        "custom": True,
+        "transformerlens": TRANSFORMER_LENS_AVAILABLE,
+        "transformerlens_install_hint": (
+            None if TRANSFORMER_LENS_AVAILABLE else TRANSFORMER_LENS_INSTALL_HINT
+        ),
+    }
+
+
+@app.get("/model_cache_status")
+def model_cache_status(model_name: str):
+    """Check if a model is already in the local Hugging Face cache."""
+    return get_model_cache_status(model_name)
 
 
 @app.get("/model_status")

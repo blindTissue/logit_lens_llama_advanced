@@ -15,6 +15,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from model import LlamaModel
 from qwen3_model import Qwen3Model
 from logit_lens import compute_logit_lens, decode_top_k
+from session_tensors import build_tensor_archive, extract_states_from_custom_outputs
 from backends.base import BaseBackend
 
 
@@ -159,7 +160,9 @@ class CustomBackend(BaseBackend):
             )
 
         # Process states based on lens_type
-        states_to_process, layer_names = self._extract_states(outputs, lens_type)
+        states_to_process, layer_names, state_kinds = extract_states_from_custom_outputs(
+            outputs, lens_type
+        )
 
         # Compute logit lens
         # Note: All hidden states are now pre-normalized, so we always apply norm
@@ -177,13 +180,17 @@ class CustomBackend(BaseBackend):
         # Get input tokens
         input_tokens = [self.tokenizer.decode([tid]) for tid in input_ids[0].tolist()]
 
-        # Prepare tensors
-        tensors = {
-            "hidden_states": np.stack([h.cpu().numpy() for h in states_to_process]),
-            "logits": outputs["logits"].cpu().numpy(),
-            "layer_names": np.array(layer_names),
-            "post_attention_states": np.stack([h.cpu().numpy() for h in outputs["post_attention_states"]])
-        }
+        attentions = outputs.get("attentions") if return_attention else None
+        tensors = build_tensor_archive(
+            states=states_to_process,
+            layer_names=layer_names,
+            state_kinds=state_kinds,
+            lens_type=lens_type,
+            num_hidden_layers=self.model.config.num_hidden_layers,
+            logits=outputs["logits"],
+            post_attention_states=outputs["post_attention_states"],
+            attentions=attentions if attentions else None,
+        )
 
         response = {
             "text": text,
@@ -193,12 +200,11 @@ class CustomBackend(BaseBackend):
         }
 
         # Add attention if requested
-        if return_attention and "attentions" in outputs and outputs["attentions"]:
+        if return_attention and attentions:
             attn_data = []
-            for layer_attn in outputs["attentions"]:
+            for layer_attn in attentions:
                 attn_data.append(layer_attn[0].cpu().numpy().tolist())
             response["attention"] = attn_data
-            tensors["attentions"] = np.stack([a.cpu().numpy() for a in outputs["attentions"]])
 
         return response
 
@@ -301,45 +307,3 @@ class CustomBackend(BaseBackend):
 
         return hook
 
-    def _extract_states(self, outputs: Dict, lens_type: str) -> tuple:
-        """Extract states based on lens_type."""
-        states = []
-        names = []
-
-        if lens_type == "post_attention":
-            states.append(outputs["hidden_states"][0])
-            names.append("Embeddings")
-
-            for i, state in enumerate(outputs["post_attention_states"]):
-                states.append(state)
-                names.append(f"L{i} Post-Attn")
-
-            states.append(outputs["hidden_states"][-1])
-            names.append("Final Output")
-
-        elif lens_type == "combined":
-            states.append(outputs["hidden_states"][0])
-            names.append("Embeddings")
-
-            for i in range(len(outputs["post_attention_states"])):
-                states.append(outputs["post_attention_states"][i])
-                names.append(f"L{i} Post-Attn")
-
-                states.append(outputs["hidden_states"][i + 1])
-                names.append(f"L{i} Block Out")
-
-            # Add final output state (after all layers, before final norm)
-            states.append(outputs["hidden_states"][-1])
-            names.append("Final Output")
-
-        else:  # block_output
-            for i, state in enumerate(outputs["hidden_states"]):
-                states.append(state)
-                if i == 0:
-                    names.append("Embeddings")
-                elif i == len(outputs["hidden_states"]) - 1:
-                    names.append("Final Output")
-                else:
-                    names.append(f"Layer {i - 1}")
-
-        return states, names
